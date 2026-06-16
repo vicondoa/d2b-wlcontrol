@@ -12,8 +12,8 @@ nixlingd **public** socket and, where it is the better boundary, the
 official `nixling` CLI.
 
 > Status: the Waybar indicator, the live nixlingd public-socket client,
-> the reduced status model, auth-gated action planning, and the GTK
-> control center are all in place. Audio mic/speaker controls are present
+> the reduced status model, auth-gated action planning, and the Quickshell
+> layer-shell popup are all in place. Audio mic/speaker controls are present
 > but disabled pending a daemon-native nixling audio control plane.
 
 ## What it does
@@ -21,7 +21,7 @@ official `nixling` CLI.
 - **Glanceable status in Waybar** — a compact `◆ 2/4` style indicator
   with state-driven CSS classes (`all-running`, `partial-running`,
   `attention`, `daemon-down`, `auth-denied`) and a per-VM tooltip.
-- **A GTK4/libadwaita control center** — per-VM cards with lifecycle
+- **A Quickshell layer-shell control popup** — per-VM cards with lifecycle
   controls, terminal launch, USB attach/detach, and store verify, all
   gated on your effective nixling authorization.
 - **Safe by construction** — public socket only; no broker socket, no
@@ -47,7 +47,7 @@ nix run github:vicondoa/nixling-wlcontrol -- status-json
 For development:
 
 ```bash
-nix develop          # rust toolchain + GTK system deps
+nix develop          # rust toolchain + quickshell
 cargo test --workspace
 ```
 
@@ -70,8 +70,8 @@ refreshes. See [docs/waybar.md](./docs/waybar.md).
 
 ## niri setup
 
-An optional floating-window rule for the control center lives in
-[`data/niri-window-rule.kdl`](./data/niri-window-rule.kdl). See
+No niri window rule is required: `nixling-wlcontrol open` uses
+Quickshell's layer-shell surface as a fixed top-right popup. See
 [docs/niri.md](./docs/niri.md).
 
 ## Configuration

@@ -11,7 +11,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **Workspace and contract.** Rust workspace with `wlcontrol-core`
   (domain model, config, reducer, action planner), `wlcontrol-nixling`
   (public-socket client), `wlcontrol-waybar` (custom-module renderer),
-  `wlcontrol-ui` (GTK4/libadwaita control center), and `wlcontrol-cli`
+  `wlcontrol-ui` (Quickshell layer-shell frontend), and `wlcontrol-cli`
   (the `nixling-wlcontrol` binary).
 - **Live nixlingd client.** Direct public-socket client speaking the
   non-abstract `SOCK_SEQPACKET` protocol: hello/version negotiation,
@@ -29,17 +29,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
   (env, state, pending-restart, USB ownership), signal-driven refresh
   (`SIGRTMIN+8`), non-overlapping refresh, daemon-down backoff, and
   persisted display mode.
-- **GTK control center.** Single-instance libadwaita application
-  (app-id `dev.vicondoa.NixlingWlControl`) with per-env VM cards,
-  auth-gated action controls (start/stop/restart/switch, launch
-  terminal, USB attach/detach, store verify), off-main-thread socket
-  dispatch with toasts, destructive-action confirmations, and
-  daemon-down/auth-denied recovery pages. Audio controls render disabled
-  until nixling exposes a daemon-native audio control plane.
+- **Quickshell control popup.** Fixed top-right layer-shell popup with
+  per-env VM cards, one-click show/hide behavior, Material-style action
+  icons, first-class USB attach/detach chips, and auth-gated controls
+  for start/stop/restart, terminal launch, switch, and store verify.
+  Audio controls remain hidden/disabled until nixling exposes a
+  daemon-native audio control plane.
 - **Safety model.** Public socket only (never the broker socket), no
   `sudo`, no nixling state-file mutation, argv-only command execution,
   and authorization derived from `nixling auth status`.
-- **Packaging and docs.** Nix flake (package/app/devShell with the GTK
-  closure), CI gate, starter Waybar config + CSS + niri window rule,
+- **Packaging and docs.** Nix flake (package/app/devShell with
+  Quickshell + Material Symbols), CI gate, starter Waybar config + CSS,
   `AGENTS.md`, and the configuration / controls / Waybar / niri /
   security documentation set.

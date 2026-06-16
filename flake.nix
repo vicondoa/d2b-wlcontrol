@@ -15,14 +15,8 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
       pkgsFor = system: import nixpkgs { inherit system; };
 
-      # GTK runtime/build closure used by the control center (Wave 2). Declared
-      # now so the package and dev shell are stable across waves.
-      gtkInputs =
-        pkgs: with pkgs; [
-          glib
-          gtk4
-          libadwaita
-        ];
+      runtimeBins = pkgs: with pkgs; [ quickshell ];
+      runtimeFonts = pkgs: with pkgs; [ material-symbols ];
     in
     {
       packages = forAllSystems (
@@ -37,17 +31,19 @@
             src = self;
             cargoLock.lockFile = ./Cargo.lock;
 
-            nativeBuildInputs = with pkgs; [
-              pkg-config
-              wrapGAppsHook4
-            ];
-            buildInputs = gtkInputs pkgs;
+            nativeBuildInputs = with pkgs; [ makeWrapper ];
 
             # The binary is provided by the wlcontrol-cli crate.
             cargoBuildFlags = [
               "-p"
               "wlcontrol-cli"
             ];
+
+            postInstall = ''
+              wrapProgram "$out/bin/nixling-wlcontrol" \
+                --prefix PATH : ${pkgs.lib.makeBinPath (runtimeBins pkgs)} \
+                --prefix XDG_DATA_DIRS : ${pkgs.lib.makeSearchPath "share" (runtimeFonts pkgs)}
+            '';
 
             meta = with pkgs.lib; {
               description = "Waybar indicator and control center for nixling microVMs";
@@ -74,14 +70,13 @@
         {
           default = pkgs.mkShell {
             nativeBuildInputs = with pkgs; [
-              pkg-config
               rustc
               cargo
               clippy
               rustfmt
-              wrapGAppsHook4
+              quickshell
+              material-symbols
             ];
-            buildInputs = gtkInputs pkgs;
           };
         }
       );

@@ -6,10 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "GTK4/libadwaita control center for nixling-wlcontrol."
+description = "Quickshell layer-shell frontend launcher for nixling-wlcontrol."
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.9" }
-adw = { package = "libadwaita", version = "0.7", features = ["v1_2"] }
 wlcontrol-core.workspace = true
-wlcontrol-nixling.workspace = true
