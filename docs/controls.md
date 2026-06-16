@@ -44,6 +44,6 @@ controls **disabled with a clear reason** and never edits
 `audio-state.json` directly. When nixling ships a working audio surface,
 these controls light up with no UI redesign.
 
-> Owning wave: Wave 1 hardens the per-action state rules; Wave 2 wires
-> the matrix into the GTK control center with async workers and
-> confirmations.
+The control center renders this matrix with auth-aware gating: blocked
+actions are disabled with a tooltip explaining why, and destructive
+actions (stop/restart/switch on a running VM) prompt for confirmation.

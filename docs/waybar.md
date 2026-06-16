@@ -69,6 +69,7 @@ your bar's font, padding, and base styling.
 | Right | Cycle compact / detail display mode. |
 | Middle | Refresh now. |
 
-> Owning wave: Wave 2 hardens the loop (signal-driven refresh,
-> non-overlapping refresh, daemon-down backoff) and the compact/detail
-> display modes.
+> The loop supports signal-driven refresh (`SIGRTMIN+8`, paired with the
+> module's `"signal": 8`), non-overlapping refresh, daemon-down backoff,
+> and compact/detail display modes (toggle with
+> `nixling-wlcontrol action cycle-display`).

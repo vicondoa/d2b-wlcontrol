@@ -302,7 +302,7 @@ fn daemon_down_backoff(base: Duration, daemon_down_cycles: u32) -> Duration {
 
 fn waybar_config_output() -> String {
     format!(
-        "// For signal-driven refresh, add \"signal\": {offset}; Waybar sends SIGRTMIN+{offset}.\n{WAYBAR_CONFIG_SNIPPET}",
+        "// The \"signal\": {offset} key below lets `action cycle-display` refresh the bar immediately via SIGRTMIN+{offset}.\n{WAYBAR_CONFIG_SNIPPET}",
         offset = WAYBAR_REFRESH_SIGNAL_OFFSET
     )
 }

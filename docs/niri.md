@@ -29,6 +29,6 @@ window-rule {
 instance, so repeated clicks on the Waybar module never spawn duplicate
 windows.
 
-> Owning wave: Wave 2 implements the GTK application (app-id,
-> single-instance open/focus). Until then `open` returns a typed
-> "implemented in Wave 2" error.
+`nixling-wlcontrol open` launches the GTK control center as a
+single-instance application: a second invocation presents the existing
+window instead of opening a new one.

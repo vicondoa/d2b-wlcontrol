@@ -11,10 +11,10 @@ store — without ever touching anything privileged. It talks only to the
 nixlingd **public** socket and, where it is the better boundary, the
 official `nixling` CLI.
 
-> Status: early development. The Waybar indicator, reduced status model,
-> and action planning are in place; the live public-socket client and
-> GTK control center are landing wave by wave (see
-> [AGENTS.md](./AGENTS.md)).
+> Status: the Waybar indicator, the live nixlingd public-socket client,
+> the reduced status model, auth-gated action planning, and the GTK
+> control center are all in place. Audio mic/speaker controls are present
+> but disabled pending a daemon-native nixling audio control plane.
 
 ## What it does
 

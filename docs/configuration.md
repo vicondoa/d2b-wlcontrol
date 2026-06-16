@@ -38,6 +38,8 @@ guest_shell = "bash"
 | `command_timeout_ms` | integer | `4000` | Per-operation deadline. |
 | `hide_net_vms` | bool | `true` | Hide `sys-*-net` VMs from compact views. |
 | `show_pending_restart` | bool | `true` | Surface the pending-restart marker. |
+| `favorites` | array of string | `[]` | VM names pinned first, in the given order. |
+| `hidden_vms` | array of string | `[]` | VM names hidden from compact surfaces. |
 | `terminal.argv` | array of string | `["foot", "--"]` | Terminal argv prefix. |
 | `terminal.guest_shell` | string | `bash` | Guest shell launched inside the VM. |
 
@@ -58,5 +60,6 @@ argv = ["kitty", "--"]             # kitty
 argv = ["alacritty", "-e"]         # alacritty
 ```
 
-> Owning wave: Wave 1 expands validation (e.g. rejecting an empty
-> `terminal.argv`) and favorites/ordering options described in the plan.
+An empty `terminal.argv` is rejected at config load, and a `public_socket`
+pointing at the privileged broker socket (`priv.sock`) is refused — the
+control surface speaks only the public socket.
