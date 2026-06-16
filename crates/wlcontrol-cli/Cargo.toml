@@ -18,4 +18,5 @@ wlcontrol-nixling.workspace = true
 wlcontrol-waybar = { path = "../wlcontrol-waybar" }
 wlcontrol-ui = { path = "../wlcontrol-ui" }
 clap.workspace = true
+serde.workspace = true
 serde_json.workspace = true

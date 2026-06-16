@@ -17,6 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 use wlcontrol_core::model::{ActionKind, Connectivity, Unavailable};
 use wlcontrol_core::{plan, reduce, Config, PlannedAction, WlState};
 use wlcontrol_nixling::NixlingClient;
@@ -65,6 +66,8 @@ enum Command {
     Open,
     /// Print the normalized control-surface state as JSON.
     StatusJson,
+    /// Print detected host USB devices as JSON for the control popup.
+    UsbDevicesJson,
     /// Dispatch a single control action.
     Action {
         #[command(subcommand)]
@@ -137,6 +140,7 @@ fn run(cli: Cli) -> wlcontrol_core::WlResult<ExitCode> {
         Command::Waybar => run_waybar(&config),
         Command::Open => run_open(&config),
         Command::StatusJson => run_status_json(&config),
+        Command::UsbDevicesJson => run_usb_devices_json(),
         Command::Action { action } => run_action(&config, action.into_kind()),
         Command::PrintWaybarConfig => {
             print!("{}", waybar_config_output());
@@ -161,6 +165,84 @@ fn run_status_json(config: &Config) -> wlcontrol_core::WlResult<ExitCode> {
     json.push('\n');
     print!("{json}");
     Ok(ExitCode::SUCCESS)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UsbDeviceOutput {
+    bus_id: String,
+    vendor_id: String,
+    product_id: String,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manufacturer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    product: Option<String>,
+}
+
+fn run_usb_devices_json() -> wlcontrol_core::WlResult<ExitCode> {
+    let devices = scan_usb_devices();
+    let mut json = serde_json::to_string_pretty(&devices)?;
+    json.push('\n');
+    print!("{json}");
+    Ok(ExitCode::SUCCESS)
+}
+
+fn scan_usb_devices() -> Vec<UsbDeviceOutput> {
+    let mut devices = fs::read_dir("/sys/bus/usb/devices")
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| usb_device_from_sysfs(&entry.path()))
+        .collect::<Vec<_>>();
+
+    devices.sort_by(|a, b| {
+        // Most nixling USB passthrough use is YubiKey; surface Yubico devices
+        // first, then stable bus-id ordering.
+        let a_yubi = a.vendor_id.eq_ignore_ascii_case("1050");
+        let b_yubi = b.vendor_id.eq_ignore_ascii_case("1050");
+        b_yubi.cmp(&a_yubi).then_with(|| a.bus_id.cmp(&b.bus_id))
+    });
+    devices
+}
+
+fn usb_device_from_sysfs(path: &Path) -> Option<UsbDeviceOutput> {
+    let bus_id = path.file_name()?.to_string_lossy().to_string();
+    // Interface directories look like `1-2:1.0`; attach expects the device
+    // busid (`1-2`), so ignore interface rows.
+    if bus_id.contains(':') {
+        return None;
+    }
+    let vendor_id = read_trimmed(path.join("idVendor"))?;
+    let product_id = read_trimmed(path.join("idProduct"))?;
+    let manufacturer = read_trimmed(path.join("manufacturer"));
+    let product = read_trimmed(path.join("product"));
+    // Root hubs and generic hubs are rarely useful attach targets; keep
+    // anything with a product string, but skip empty/generic hub-only rows.
+    if product
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case("USB2.0 Hub") || p.eq_ignore_ascii_case("USB3.0 Hub"))
+    {
+        return None;
+    }
+    let label = match (manufacturer.as_deref(), product.as_deref()) {
+        (Some(m), Some(p)) if !m.is_empty() && !p.is_empty() => format!("{m} {p} ({bus_id})"),
+        (_, Some(p)) if !p.is_empty() => format!("{p} ({bus_id})"),
+        _ => format!("{vendor_id}:{product_id} ({bus_id})"),
+    };
+    Some(UsbDeviceOutput {
+        bus_id,
+        vendor_id,
+        product_id,
+        label,
+        manufacturer,
+        product,
+    })
+}
+
+fn read_trimmed(path: impl AsRef<Path>) -> Option<String> {
+    fs::read_to_string(path).ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
 
 fn run_waybar(config: &Config) -> wlcontrol_core::WlResult<ExitCode> {
