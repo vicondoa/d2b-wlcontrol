@@ -1,0 +1,37 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/wlcontrol-core",
+    "crates/wlcontrol-nixling",
+    "crates/wlcontrol-waybar",
+    "crates/wlcontrol-ui",
+    "crates/wlcontrol-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "Apache-2.0"
+repository = "https://github.com/vicondoa/nixling-wlcontrol"
+authors = ["vicondoa"]
+
+[workspace.dependencies]
+# Internal crates
+wlcontrol-core = { path = "crates/wlcontrol-core" }
+wlcontrol-nixling = { path = "crates/wlcontrol-nixling" }
+
+# Shared third-party dependencies. Versions are pinned at the workspace
+# level so every crate speaks the same serde / error surface.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+nix = { version = "0.29", features = ["socket", "uio"] }
+directories = "5"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true

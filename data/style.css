@@ -1,0 +1,41 @@
+/* nixling-wlcontrol — starter Waybar style.
+ *
+ * These rules intentionally only set state-driven accents so the module
+ * inherits your bar's font, padding, and base colors. Override freely.
+ *
+ * Classes emitted by `nixling-wlcontrol waybar`:
+ *   all-stopped | partial-running | all-running | attention
+ *   daemon-down | auth-denied | stale
+ */
+
+#custom-nixling-wlcontrol {
+  padding: 0 8px;
+}
+
+#custom-nixling-wlcontrol.all-stopped {
+  opacity: 0.7;
+}
+
+#custom-nixling-wlcontrol.all-running {
+  color: #a6e3a1;
+}
+
+#custom-nixling-wlcontrol.partial-running {
+  color: #f9e2af;
+}
+
+#custom-nixling-wlcontrol.attention {
+  color: #fab387;
+}
+
+#custom-nixling-wlcontrol.daemon-down {
+  color: #f38ba8;
+}
+
+#custom-nixling-wlcontrol.auth-denied {
+  color: #cba6f7;
+}
+
+#custom-nixling-wlcontrol.stale {
+  opacity: 0.6;
+}

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo:
+    name: Rust workspace gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
+
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup show
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+  flake:
+    name: Nix flake check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Flake evaluation
+        run: nix flake check --no-build --all-systems

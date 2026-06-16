@@ -1,0 +1,16 @@
+// nixling-wlcontrol — Waybar custom module.
+//
+// Add this object to the "modules-*" arrays in your Waybar config and place
+// "custom/nixling-wlcontrol" where you want the indicator to appear.
+//
+// The module is a continuous (self-looping) custom module: it emits one JSON
+// line per refresh and must NOT be given an "interval".
+"custom/nixling-wlcontrol": {
+  "exec": "nixling-wlcontrol waybar",
+  "return-type": "json",
+  "restart-interval": 5,
+  "on-click": "nixling-wlcontrol open",
+  "on-click-right": "nixling-wlcontrol action cycle-display",
+  "on-click-middle": "nixling-wlcontrol action refresh",
+  "tooltip": true
+}
