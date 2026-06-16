@@ -67,12 +67,11 @@ These are hard rules. See "Don'ts" below.
 │   │                            reducer, action planner (see src/model.rs)
 │   ├── wlcontrol-nixling/    <- direct nixlingd public-socket client + framing
 │   ├── wlcontrol-waybar/     <- Waybar custom-module JSON renderer
-│   ├── wlcontrol-ui/         <- GTK4/libadwaita control center
+│   ├── wlcontrol-ui/         <- Quickshell/QML layer-shell popup launcher
 │   └── wlcontrol-cli/        <- `nixling-wlcontrol` binary (integration seam)
 ├── data/
 │   ├── waybar-module.jsonc   <- starter Waybar custom-module config
-│   ├── style.css             <- starter, class-based CSS
-│   └── niri-window-rule.kdl  <- optional niri floating-window rule
+│   └── style.css             <- starter, class-based CSS
 ├── docs/                     <- configuration / controls / waybar / niri / security
 └── tests/                    <- cross-crate fixtures + integration tests
 ```
@@ -116,9 +115,9 @@ cargo test --workspace
 nix flake check --no-build --all-systems      # NIX_CONFIG='experimental-features = nix-command flakes'
 ```
 
-Zero clippy warnings is a hard requirement (`-D warnings`). The GTK
-crate (`wlcontrol-ui`) needs `gtk4` + `libadwaita` system libraries;
-the flake devShell provides them (`nix develop`).
+Zero clippy warnings is a hard requirement (`-D warnings`). The visible
+control popup is Quickshell/QML; the flake devShell provides
+`quickshell` and the Material Symbols font (`nix develop`).
 
 ## Development workflow
 
@@ -200,12 +199,12 @@ desktop-control-app roster:
 | --- | --- |
 | `rust` | Workspace architecture, async/concurrency, ownership/lifetimes, memory safety, dependency direction, error typing. |
 | `protocol` | nixlingd public-socket handshake, length-prefixed JSON framing, version negotiation, response typing, auth-role mapping, CLI-fallback boundaries. |
-| `wayland` | niri/Wayland behavior, app-id / window-rule correctness, single-instance open/focus, no XWayland assumptions. |
+| `wayland` | niri/Wayland behavior, layer-shell placement/toggle behavior, no XWayland assumptions. |
 | `waybar` | Custom-module JSON contract, update loop, click actions, CSS classes, tooltip quality, restart/backoff. |
-| `gtk-ux` | GTK4/libadwaita structure, accessibility, keyboard nav, responsiveness, action discoverability, clean visual hierarchy. |
+| `shell-ux` | Quickshell/QML layer-shell structure, keyboard/mouse ergonomics, responsiveness, action discoverability, clean visual hierarchy. |
 | `security` | Public-socket-only boundary, no broker/sudo/state-file mutation, command-injection resistance, argv/log redaction, safe confirmations. |
 | `test` | Fake-nixlingd coverage, fixtures, reducer/golden tests, UI view-model tests, failure/timeout cases, CI sufficiency. |
-| `nix-packaging` | Flake packaging, GTK runtime closure, Waybar/niri install snippets, dev shell, optional HM/NixOS module shape. |
+| `nix-packaging` | Flake packaging, Quickshell/runtime font closure, Waybar/niri install snippets, dev shell, optional HM/NixOS module shape. |
 | `product` | Control matrix, defaults, advanced-mode boundaries, not-dumbed-down UX, actionable error/remediation copy. |
 | `docs` | README/config docs, Waybar and niri setup, security model, control-surface reference, troubleshooting. |
 
@@ -224,8 +223,8 @@ skip the gate unless the doc describes load-bearing behavior.
   `nixling auth status` role, not on guesswork.
 - **Waybar output.** One newline-terminated JSON object per update;
   no `interval` on the self-looping module; stable CSS classes only.
-- **GTK.** Stable app-id `dev.vicondoa.NixlingWlControl`; single
-  instance; no XWayland assumptions (the user runs niri/Wayland).
+- **Quickshell popup.** Fixed-size layer-shell surface; no XWayland
+  assumptions; `open` toggles show/hide from Waybar.
 - **Audio.** Render mic/speaker controls disabled with a clear reason
   until nixling's `audio` CLI/socket surface returns success — do not
   mutate audio state files directly.
@@ -279,7 +278,7 @@ to.
 - [docs/configuration.md](./docs/configuration.md) — config surface.
 - [docs/controls.md](./docs/controls.md) — action matrix + auth gating.
 - [docs/waybar.md](./docs/waybar.md) — Waybar module JSON + CSS.
-- [docs/niri.md](./docs/niri.md) — niri window rules + Wayland notes.
+- [docs/niri.md](./docs/niri.md) — niri / layer-shell Wayland notes.
 - [docs/security.md](./docs/security.md) — trust boundary + command safety.
 - [nixling `docs/reference/daemon-api.md`](https://github.com/vicondoa/nixling/blob/main/docs/reference/daemon-api.md)
   — the public-socket wire contract this client speaks.

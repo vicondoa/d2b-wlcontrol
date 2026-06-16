@@ -1,34 +1,29 @@
 # niri / Wayland integration
 
 `nixling-wlcontrol` targets niri (and Wayland compositors generally)
-natively. It makes **no XWayland assumptions** and uses a Waybar custom
-module for the panel rather than a legacy tray/AppIndicator, which is
-inconsistent on pure Wayland.
+natively. It makes **no XWayland assumptions** and uses:
 
-## Control-center window rule
+- a Waybar custom module for the bar indicator; and
+- a Quickshell layer-shell popup for the control surface.
 
-The GTK control center uses a stable application id
-`dev.vicondoa.NixlingWlControl`. To make it open as a tidy floating
-window in niri, add the rule from
-[`data/niri-window-rule.kdl`](../data/niri-window-rule.kdl) to your niri
-config:
+## Popup behavior
 
-```kdl
-window-rule {
-    match app-id="dev.vicondoa.NixlingWlControl"
+`nixling-wlcontrol open` toggles a fixed top-right Quickshell popup:
 
-    open-floating true
-    default-column-width { fixed 520; }
-    default-window-height { fixed 640; }
-}
-```
+- first invocation shows it;
+- the next invocation hides it;
+- the popup is a layer-shell surface, not a normal tiled window; and
+- no niri `window-rule` is required.
 
-## Single instance
+This matches Waybar click ergonomics: bind left-click to
+`nixling-wlcontrol open`, click once to show controls, click again to
+hide them.
 
-`nixling-wlcontrol open` opens or focuses a single control-center
-instance, so repeated clicks on the Waybar module never spawn duplicate
-windows.
+## Theme
 
-`nixling-wlcontrol open` launches the GTK control center as a
-single-instance application: a second invocation presents the existing
-window instead of opening a new one.
+The popup uses the same Catppuccin-like color language as the shipped
+Waybar CSS: dark base, green running/start, red stop, peach restart or
+attention, teal USB, blue switch, and purple terminal.
+
+If you replace the generated CSS with your own Waybar colors, keep the
+same semantic mapping so the bar and popup still read as one UI.
