@@ -200,8 +200,10 @@ ShellRoot {
 
   property string backend: Quickshell.env("NIXLING_WLCONTROL_BIN") || "nixling-wlcontrol"
   property var state: ({ connectivity: "daemon-down", role: "none", vms: [] })
+  property var usbDevices: []
   property bool busy: false
   property string hoverHint: ""
+  property string actionMessage: ""
 
   function visibleVms() {
     const vms = state.vms || []
@@ -237,12 +239,36 @@ ShellRoot {
     statusProc.exec([backend, "status-json"])
   }
 
+  function reloadUsbDevices() {
+    usbDevicesProc.exec([backend, "usb-devices-json"])
+  }
+
   function action(args) {
     busy = true
+    actionMessage = "running " + args.join(" ")
     actionProc.exec([backend, "action"].concat(args))
   }
 
+  function attachOrPrompt(card, vm, u) {
+    if (!canUsb(vm, u)) return
+    if (u.bound) {
+      action(["usb-detach", vm.name, u.busId])
+    } else if (u.busId && u.busId !== "pending") {
+      action(["usb-attach", vm.name, u.busId])
+    } else {
+      card.usbEntryVisible = !card.usbEntryVisible
+      card.usbEntryText = ""
+      if (card.usbEntryVisible) {
+        reloadUsbDevices()
+        hoverHint = "Select a USB device or enter a bus id for " + vm.name
+      } else {
+        hoverHint = ""
+      }
+    }
+  }
+
   function statusText() {
+    if (actionMessage.length > 0) return actionMessage
     if (busy) return "working…"
     if (state.connectivity === "connected") return "live"
     if (state.connectivity === "auth-denied") return "auth denied"
@@ -281,6 +307,12 @@ ShellRoot {
     return (u.bound ? "Detach USB " : "Attach USB ") + u.busId
   }
 
+  function shortDeviceLabel(device) {
+    const product = device.product || device.label || "USB device"
+    const name = product.length > 18 ? product.substring(0, 17) + "…" : product
+    return name + " " + device.busId
+  }
+
   Process {
     id: statusProc
     stdout: StdioCollector {
@@ -297,10 +329,38 @@ ShellRoot {
   }
 
   Process {
-    id: actionProc
-    stdout: StdioCollector {}
+    id: usbDevicesProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          root.usbDevices = JSON.parse(this.text)
+        } catch (e) {
+          root.usbDevices = []
+          root.hoverHint = "Could not list USB devices: " + String(e)
+        }
+      }
+    }
     stderr: StdioCollector {}
-    onExited: root.reload()
+  }
+
+  Process {
+    id: actionProc
+    property string out: ""
+    property string err: ""
+    stdout: StdioCollector {
+      onStreamFinished: actionProc.out = this.text.trim()
+    }
+    stderr: StdioCollector {
+      onStreamFinished: actionProc.err = this.text.trim()
+    }
+    onExited: {
+      if (actionProc.err.length > 0) root.actionMessage = actionProc.err
+      else if (actionProc.out.length > 0) root.actionMessage = actionProc.out
+      else root.actionMessage = "done"
+      actionProc.out = ""
+      actionProc.err = ""
+      root.reload()
+    }
   }
 
   Timer {
@@ -317,36 +377,26 @@ ShellRoot {
     focusable: true
     aboveWindows: true
     exclusiveZone: 0
-    implicitWidth: 376
-    implicitHeight: 516
+    width: 420
+    height: 620
     color: "transparent"
     surfaceFormat { opaque: false }
-    mask: Region { item: card }
 
     anchors { top: true; right: true }
-    margins { top: 0; right: 0 }
+    margins { top: 8; right: 8 }
 
-    Item {
+    Rectangle {
       anchors.fill: parent
+      radius: 18
+      color: "#1e1e2e"
+      border.color: "#45475a"
+      border.width: 1
+      clip: true
 
-      Rectangle {
-        id: card
-        width: 360
-        height: 500
-        anchors.top: parent.top
-        anchors.right: parent.right
-        anchors.topMargin: 8
-        anchors.rightMargin: 8
-        radius: 16
-        color: "#1e1e2e"
-        border.color: "#45475a"
-        border.width: 1
-        clip: true
-
-        Column {
-          anchors.fill: parent
-          anchors.margins: 12
-          spacing: 9
+      Column {
+        anchors.fill: parent
+        anchors.margins: 16
+        spacing: 12
 
           Row {
             width: parent.width
@@ -428,6 +478,7 @@ ShellRoot {
                 model: root.visibleVms()
 
                 Rectangle {
+                  id: vmCard
                   width: list.width
                   height: cardContent.implicitHeight + 16
                   radius: 13
@@ -437,6 +488,8 @@ ShellRoot {
 
                   property var vm: modelData
                   property bool expanded: false
+                  property bool usbEntryVisible: false
+                  property string usbEntryText: ""
 
                 Column {
                   id: cardContent
@@ -521,7 +574,7 @@ ShellRoot {
                         tooltip: root.usbTooltip(vm, modelData)
                         accent: "#94e2d5"
                         enabled: root.canUsb(vm, modelData)
-                        onClicked: root.action([modelData.bound ? "usb-detach" : "usb-attach", vm.name, modelData.busId])
+                        onClicked: root.attachOrPrompt(vmCard, vm, modelData)
                       }
                     }
                     Rectangle {
@@ -531,6 +584,82 @@ ShellRoot {
                       radius: 999
                       color: "#4a3223"
                       Text { id: restartText; anchors.centerIn: parent; color: "#fab387"; font.pixelSize: 10; font.bold: true; text: "restart" }
+                    }
+                  }
+
+                  Row {
+                    visible: usbEntryVisible
+                    width: parent.width
+                    height: visible ? chooserFlow.implicitHeight : 0
+                    spacing: 6
+
+                    Flow {
+                      id: chooserFlow
+                      width: parent.width
+                      spacing: 6
+
+                      Repeater {
+                        model: root.usbDevices
+                        ControlChip {
+                          icon: "usb"
+                          label: root.shortDeviceLabel(modelData)
+                          tooltip: "Attach " + modelData.label + " to " + vm.name
+                          accent: "#94e2d5"
+                          enabled: root.canMutate()
+                          onClicked: root.action(["usb-attach", vm.name, modelData.busId])
+                        }
+                      }
+                    }
+                  }
+
+                  Row {
+                    visible: usbEntryVisible
+                    width: parent.width
+                    height: visible ? 30 : 0
+                    spacing: 6
+
+                    Rectangle {
+                      width: parent.width - 86
+                      height: 28
+                      radius: 8
+                      color: "#181825"
+                      border.color: "#45475a"
+                      border.width: 1
+
+                      TextInput {
+                        id: usbEntry
+                        anchors.fill: parent
+                        anchors.leftMargin: 9
+                        anchors.rightMargin: 9
+                        color: "#cdd6f4"
+                        selectionColor: "#89b4fa"
+                        selectedTextColor: "#11111b"
+                        font.pixelSize: 12
+                        verticalAlignment: TextInput.AlignVCenter
+                        text: usbEntryText
+                        onTextChanged: usbEntryText = text
+                        Keys.onReturnPressed: {
+                          if (usbEntryText.length > 0) root.action(["usb-attach", vm.name, usbEntryText])
+                        }
+                      }
+                      Text {
+                        visible: usbEntry.text.length === 0
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 9
+                        color: "#6c7086"
+                        font.pixelSize: 12
+                        text: "USB bus id (e.g. 1-2)"
+                      }
+                    }
+
+                    ControlChip {
+                      icon: "usb"
+                      label: "attach"
+                      tooltip: "Attach entered USB bus id"
+                      accent: "#94e2d5"
+                      enabled: usbEntryText.length > 0 && root.canMutate()
+                      onClicked: root.action(["usb-attach", vm.name, usbEntryText])
                     }
                   }
 
@@ -554,7 +683,6 @@ ShellRoot {
               }
             }
           }
-        }
       }
     }
   }
