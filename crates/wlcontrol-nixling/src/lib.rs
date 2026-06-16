@@ -91,40 +91,46 @@ impl NixlingClient {
     /// Fallible refresh variant useful for tests and diagnostics.
     pub fn try_refresh(&self) -> WlResult<ReduceInput> {
         let auth = self.request(request_auth_status)?;
-        let mut inventory = self.request(request_inventory).ok();
+
+        // After auth succeeds, a transport / protocol / timeout failure on any
+        // core query means the connection or daemon is now unhealthy. Propagate
+        // it so `refresh` degrades to daemon-down instead of returning a
+        // false-healthy "Connected with zero VMs" snapshot (each `request`
+        // reconnects, so these are independent calls).
+        let mut inventory = self.request(request_inventory)?;
         let status_snapshots = inventory
-            .as_ref()
-            .map(|inventory| {
-                inventory
-                    .vms
-                    .iter()
-                    .filter_map(|vm| {
-                        self.request(|transport| request_status_snapshot(transport, &vm.name))
-                            .ok()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        if let Some(inventory) = inventory.as_mut() {
-            for vm in &mut inventory.vms {
-                if let Some(snapshot) = status_snapshots
-                    .iter()
-                    .find(|snapshot| snapshot.status.name == vm.name)
-                {
-                    vm.static_ip = snapshot.static_ip.clone();
-                }
+            .vms
+            .iter()
+            .map(|vm| self.request(|transport| request_status_snapshot(transport, &vm.name)))
+            .collect::<WlResult<Vec<_>>>()?;
+
+        for vm in &mut inventory.vms {
+            if let Some(snapshot) = status_snapshots
+                .iter()
+                .find(|snapshot| snapshot.status.name == vm.name)
+            {
+                vm.static_ip = snapshot.static_ip.clone();
             }
         }
         let statuses = status_snapshots
             .into_iter()
             .map(|snapshot| snapshot.status)
-            .collect();
-        let usb = self.request(request_usb_probe).ok();
+            .collect::<Vec<_>>();
+
+        // USB probe is best-effort ONLY for daemon-healthy typed errors: a
+        // broker reconcile failure surfaces as `WlError::Nixling`, so show no
+        // USB claims but keep the VM view. A transport / protocol / timeout
+        // failure still degrades the whole refresh.
+        let usb = match self.request(request_usb_probe) {
+            Ok(usb) => Some(usb),
+            Err(WlError::Nixling(_)) => None,
+            Err(err) => return Err(err),
+        };
 
         Ok(ReduceInput {
             connectivity: Connectivity::Connected,
             auth: Some(auth),
-            inventory,
+            inventory: Some(inventory),
             statuses,
             usb,
         })

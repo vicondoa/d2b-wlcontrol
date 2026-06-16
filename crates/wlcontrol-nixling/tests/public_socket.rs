@@ -219,6 +219,21 @@ fn close_after_hello_degrades_refresh_and_reports_daemon_down() {
 }
 
 #[test]
+fn post_auth_request_failure_degrades_refresh_not_false_healthy() {
+    // Regression (panel W1fu2): auth succeeds but the inventory request then
+    // fails on a closed connection. refresh() MUST degrade to daemon-down
+    // rather than returning a false-healthy "Connected with zero VMs"
+    // snapshot built from the successful auth alone.
+    let server = FakeNixlingd::start(FakeMode::RefreshAuthThenClose);
+    let client = client_for_timeout(server.path(), 100);
+
+    let input = client.refresh();
+
+    assert_degraded_refresh(&input);
+    server.join();
+}
+
+#[test]
 fn invalid_json_degrades_refresh_and_is_protocol_error_on_dispatch() {
     let server = FakeNixlingd::start(FakeMode::InvalidJson);
     let client = client_for_timeout(server.path(), 100);
@@ -305,6 +320,10 @@ enum FakeMode {
     UsbProbeBrokerError,
     AcceptThenStall,
     CloseAfterHello,
+    /// Answer `authStatus` successfully, then close the next connection
+    /// (the inventory request) before responding — exercising a transport
+    /// failure that happens AFTER auth succeeds.
+    RefreshAuthThenClose,
     InvalidJson,
     LengthMismatchFrame,
     OversizedFrame,
@@ -350,6 +369,11 @@ fn serve(listener: OwnedFd, mode: FakeMode) {
         for expected in ["authStatus", "list", "status", "usbipProbe"] {
             serve_connection(&listener, mode, Some(expected));
         }
+    } else if mode == FakeMode::RefreshAuthThenClose {
+        // Connection 1: answer authStatus like a healthy Refresh.
+        serve_connection(&listener, FakeMode::Refresh, Some("authStatus"));
+        // Connection 2 (inventory): handshake, then close before responding.
+        serve_connection(&listener, FakeMode::CloseAfterHello, None);
     } else {
         serve_connection(&listener, mode, None);
     }
