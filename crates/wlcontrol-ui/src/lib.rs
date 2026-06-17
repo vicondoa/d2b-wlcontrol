@@ -250,6 +250,15 @@ ShellRoot {
     return "#6c7086"
   }
 
+  function envAccentColor(env) {
+    // Match waybar group accent colors: work=orange, personal=green, default=blue
+    if (!env) return "#89b4fa"
+    const e = env.toLowerCase()
+    if (e === "work") return "#ffa500"
+    if (e === "personal") return "#a6e3a1"
+    return "#89b4fa"
+  }
+
   function vmGlyph(vm) {
     if (vm.state === "running") return "●"
     if (vm.state === "starting" || vm.state === "stopping") return "◐"
@@ -559,8 +568,8 @@ ShellRoot {
     Rectangle {
       anchors.fill: parent
       radius: 18
-      color: "#1e1e2e"
-      border.color: "#45475a"
+      color: "#0f1117"
+      border.color: "#2a2d35"
       border.width: 1
       clip: true
 
@@ -596,7 +605,7 @@ ShellRoot {
               width: 66
               height: 22
               radius: 999
-              color: root.state.connectivity === "connected" ? "#1f3f2c" : "#4a1f2a"
+              color: root.state.connectivity === "connected" ? "#1a2e1a" : "#2e1a1a"
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               Text {
@@ -612,7 +621,7 @@ ShellRoot {
               anchors.centerIn: parent
               width: parent.width - 160
               anchors.verticalCenter: parent.verticalCenter
-              color: "#cdd6f4"
+              color: "#ffffff"
               font.pixelSize: 16
               font.bold: true
               horizontalAlignment: Text.AlignHCenter
@@ -627,14 +636,14 @@ ShellRoot {
               IconButton {
                 text: "monitoring"
                 tooltip: root.observabilityEnabled ? "Open Signoz observability portal" : "Observability URL is not configured"
-                accent: "#f9e2af"
+                accent: "#ffffff"
                 enabled: root.observabilityEnabled && !root.busy
                 onClicked: root.action(["observability"])
               }
               IconButton {
                 text: "refresh"
                 tooltip: "Refresh VM status"
-                accent: "#89b4fa"
+                accent: "#ffffff"
                 enabled: !root.busy
                 onClicked: root.reload()
               }
@@ -644,7 +653,7 @@ ShellRoot {
           Rectangle {
             width: parent.width
             height: 1
-            color: "#313244"
+            color: "#2a2d35"
           }
 
           Row {
@@ -652,13 +661,13 @@ ShellRoot {
             height: 26
             spacing: 10
             Text {
-              color: "#cdd6f4"
+              color: "#ffffff"
               font.pixelSize: 13
               font.bold: true
               text: root.runningCount() + "/" + root.visibleVms().length + " running"
             }
             Text {
-              color: "#bac2de"
+              color: "#9399b2"
               font.pixelSize: 12
               text: root.hoverHint.length > 0 ? root.hoverHint : root.statusText()
             }
@@ -669,7 +678,7 @@ ShellRoot {
             width: parent.width
             height: visible ? Math.max(26, actionResult.implicitHeight + 10) : 0
             radius: 10
-            color: root.actionFailed ? "#4a1f2a" : "#1f3f2c"
+            color: root.actionFailed ? "#2e1a1a" : "#1a2e1a"
             border.color: root.actionFailed ? "#f38ba8" : "#a6e3a1"
             border.width: 1
 
@@ -710,14 +719,25 @@ ShellRoot {
                   width: list.width
                   height: cardContent.implicitHeight + 16
                   radius: 13
-                  color: "#313244"
-                  border.color: "#45475a"
+                  color: "#16181d"
+                  border.color: "#2a2d35"
                   border.width: 1
+                  clip: true
 
                   property var vm: modelData
                   property bool expanded: false
                   property bool usbEntryVisible: false
                   property string usbEntryText: ""
+
+                  // Left accent border matching waybar env groups
+                  Rectangle {
+                    id: leftAccent
+                    width: 4
+                    height: parent.height
+                    x: 0
+                    y: 0
+                    color: root.envAccentColor(vm.env)
+                  }
 
                 Column {
                   id: cardContent
@@ -761,7 +781,7 @@ ShellRoot {
                       IconButton {
                         text: expanded ? "expand_less" : "more_horiz"
                         tooltip: expanded ? "Hide controls" : "More controls"
-                        accent: "#89b4fa"
+                        accent: "#ffffff"
                         enabled: root.state.connectivity === "connected"
                         onClicked: expanded = !expanded
                       }
@@ -776,7 +796,7 @@ ShellRoot {
                       spacing: 1
                       Text {
                         width: parent.width
-                        color: "#cdd6f4"
+                        color: "#ffffff"
                         font.pixelSize: 14
                         font.bold: true
                         elide: Text.ElideRight
@@ -784,7 +804,7 @@ ShellRoot {
                       }
                       Text {
                         width: parent.width
-                        color: "#a6adc8"
+                        color: "#9399b2"
                         font.pixelSize: 11
                         elide: Text.ElideRight
                         text: root.vmMeta(vm)
@@ -796,16 +816,16 @@ ShellRoot {
                     id: quickActions
                     width: parent.width
                     spacing: 8
-                    IconButton { text: "terminal"; tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin"); accent: "#cba6f7"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
+                    IconButton { text: "terminal"; tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin"); accent: "#ffffff"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
                     Repeater {
                       model: vm.quickLaunch || []
-                      IconButton { text: modelData.icon; tooltip: modelData.tooltip; accent: "#cba6f7"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["quick-launch", vm.name, modelData.id]) }
+                      IconButton { text: modelData.icon; tooltip: modelData.tooltip; accent: "#ffffff"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["quick-launch", vm.name, modelData.id]) }
                     }
-                    IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin"); accent: "#fab387"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
-                    IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(null, "admin"); accent: "#f9e2af"; enabled: root.canAdminMutate(); onClicked: root.action(["store-verify", vm.name]) }
-                    IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(null, "launcher"); accent: "#a6e3a1"; enabled: root.canMutate(); onClicked: root.action(["build", vm.name]) }
-                    IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(null, "admin"); accent: "#fab387"; enabled: root.canAdminMutate(); onClicked: root.action(["boot", vm.name]) }
-                    IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin"); accent: "#89b4fa"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
+                    IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin"); accent: "#6c7086"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
+                    IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(null, "admin"); accent: "#6c7086"; enabled: root.canAdminMutate(); onClicked: root.action(["store-verify", vm.name]) }
+                    IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(null, "launcher"); accent: "#6c7086"; enabled: root.canMutate(); onClicked: root.action(["build", vm.name]) }
+                    IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(null, "admin"); accent: "#6c7086"; enabled: root.canAdminMutate(); onClicked: root.action(["boot", vm.name]) }
+                    IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin"); accent: "#6c7086"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
                   }
 
                   Flow {
@@ -819,7 +839,7 @@ ShellRoot {
                         icon: modelData.bound ? "usb_off" : "usb"
                         label: root.usbLabel(modelData)
                         tooltip: enabled ? root.usbTooltip(vm, modelData) : (modelData.ownerVm && modelData.ownerVm !== vm.name ? root.usbTooltip(vm, modelData) : root.disabledReason(null, "admin"))
-                        accent: "#94e2d5"
+                        accent: "#6c7086"
                         enabled: root.canUsb(vm, modelData)
                         onClicked: root.attachOrPrompt(vmCard, vm, modelData)
                       }
@@ -828,7 +848,7 @@ ShellRoot {
                       icon: "add"
                       label: "USB"
                       tooltip: enabled ? ("Attach another USB device to " + vm.name) : root.disabledReason(null, "admin")
-                      accent: "#94e2d5"
+                      accent: "#6c7086"
                       enabled: root.canAdminMutate()
                       onClicked: root.attachOrPrompt(vmCard, vm, ({ busId: "pending", bound: false, ownerVm: null }))
                     }
@@ -837,7 +857,7 @@ ShellRoot {
                       height: 24
                       width: restartText.width + 18
                       radius: 999
-                      color: "#4a3223"
+                      color: "#2e2a1a"
                       Text { id: restartText; anchors.centerIn: parent; color: "#fab387"; font.pixelSize: 10; font.bold: true; text: "restart" }
                     }
                   }
@@ -859,7 +879,7 @@ ShellRoot {
                           icon: "usb"
                           label: root.shortDeviceLabel(modelData)
                           tooltip: "Attach " + modelData.label + " to " + vm.name
-                          accent: "#94e2d5"
+                          accent: "#6c7086"
                           enabled: root.canAdminMutate()
                           onClicked: root.action(["usb-attach", vm.name, modelData.busId])
                         }
@@ -878,8 +898,8 @@ ShellRoot {
                       width: parent.width - 86
                       height: 28
                       radius: 8
-                      color: "#181825"
-                      border.color: "#45475a"
+                      color: "#0d0d0d"
+                      border.color: "#2a2d35"
                       border.width: 1
 
                       TextInput {
@@ -887,9 +907,9 @@ ShellRoot {
                         anchors.fill: parent
                         anchors.leftMargin: 9
                         anchors.rightMargin: 9
-                        color: "#cdd6f4"
+                        color: "#ffffff"
                         selectionColor: "#89b4fa"
-                        selectedTextColor: "#11111b"
+                        selectedTextColor: "#000000"
                         font.pixelSize: 12
                         verticalAlignment: TextInput.AlignVCenter
                         text: usbEntryText
@@ -913,7 +933,7 @@ ShellRoot {
                       icon: "usb"
                       label: "attach"
                       tooltip: "Attach entered USB bus id"
-                      accent: "#94e2d5"
+                      accent: "#6c7086"
                       enabled: usbEntryText.length > 0 && root.canAdminMutate()
                       onClicked: root.action(["usb-attach", vm.name, usbEntryText])
                     }
@@ -937,7 +957,7 @@ ShellRoot {
                 x: vmListFlickable.width - width
                 y: 0
                 radius: 999
-                color: "#1e1e2e"
+                color: "#0d0d0d"
 
                 Rectangle {
                   width: parent.width
