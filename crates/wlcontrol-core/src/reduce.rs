@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 
 use crate::config::Config;
-use crate::model::{AuthRole, Connectivity, RuntimeState, UsbClaim, Vm, WlState};
+use crate::model::{AuthRole, Connectivity, QuickLaunchIcon, RuntimeState, UsbClaim, Vm, WlState};
 use crate::sources::{InventoryVm, ReduceInput, VmStatus};
 
 /// Reduce a bundle of source fragments into the aggregate [`WlState`].
@@ -69,6 +69,7 @@ pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
                 &usb_claims,
                 &hidden_names,
                 config.show_pending_restart,
+                config,
             )
         })
         .collect();
@@ -88,6 +89,7 @@ fn build_vm(
     usb_claims: &[UsbClaim],
     hidden_names: &HashSet<&str>,
     show_pending_restart: bool,
+    config: &Config,
 ) -> Vm {
     let status = statuses.iter().find(|s| s.name == inv.name);
     let is_net_vm = inv.is_net_vm || is_framework_net_vm_name(&inv.name);
@@ -101,6 +103,16 @@ fn build_vm(
         .filter(|c| c.vm == inv.name)
         .cloned()
         .collect();
+    let quick_launch = config
+        .quick_launch
+        .iter()
+        .filter(|item| item.vm == inv.name)
+        .map(|item| QuickLaunchIcon {
+            id: item.id.clone(),
+            icon: item.icon.clone(),
+            tooltip: item.tooltip.clone(),
+        })
+        .collect();
 
     Vm {
         name: inv.name,
@@ -113,6 +125,7 @@ fn build_vm(
         static_ip: inv.static_ip,
         readiness: status.map(|s| s.readiness.clone()).unwrap_or_default(),
         usb,
+        quick_launch,
     }
 }
 
@@ -394,5 +407,38 @@ mod tests {
         };
         let state = reduce_with_config(input, &config);
         assert!(!state.vms[0].pending_restart);
+    }
+
+    #[test]
+    fn quick_launch_icons_are_attached_to_target_vm() {
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![
+                    inventory_vm("work-ssd", Some("running")),
+                    inventory_vm("other", Some("running")),
+                ],
+            }),
+            ..Default::default()
+        };
+        let config = Config {
+            quick_launch: vec![crate::config::QuickLaunchConfig {
+                id: "run-openterface".into(),
+                vm: "work-ssd".into(),
+                icon: "desktop_windows".into(),
+                tooltip: "Run Openterface".into(),
+                guest_argv: vec!["/run/current-system/sw/bin/openterface-run".into()],
+            }],
+            ..Default::default()
+        };
+
+        let state = reduce_with_config(input, &config);
+
+        assert_eq!(state.vms[0].quick_launch.len(), 1);
+        assert_eq!(state.vms[0].quick_launch[0].id, "run-openterface");
+        assert!(state.vms[1].quick_launch.is_empty());
     }
 }

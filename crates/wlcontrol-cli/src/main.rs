@@ -101,6 +101,8 @@ enum ActionCommand {
     Boot { vm: String },
     /// Launch a guest terminal via detached guest-control exec.
     Terminal { vm: String },
+    /// Run a configured guest quick-launch command.
+    QuickLaunch { vm: String, id: String },
     /// Attach a USB busid to a VM.
     UsbAttach { vm: String, bus_id: String },
     /// Detach a USB busid from a VM.
@@ -124,6 +126,7 @@ impl ActionCommand {
             ActionCommand::Build { vm } => ActionKind::Build { vm },
             ActionCommand::Boot { vm } => ActionKind::Boot { vm },
             ActionCommand::Terminal { vm } => ActionKind::LaunchTerminal { vm },
+            ActionCommand::QuickLaunch { vm, id } => ActionKind::QuickLaunch { vm, id },
             ActionCommand::UsbAttach { vm, bus_id } => ActionKind::UsbAttach { vm, bus_id },
             ActionCommand::UsbDetach { vm, bus_id } => ActionKind::UsbDetach { vm, bus_id },
             ActionCommand::StoreVerify { vm } => ActionKind::StoreVerify { vm },

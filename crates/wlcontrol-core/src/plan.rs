@@ -56,6 +56,11 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
             .map(|_| Unavailable::VmState {
                 detail: "start the VM before opening a terminal".into(),
             }),
+        ActionKind::QuickLaunch { vm, .. } => running_vm(state, vm)
+            .filter(|v| v.state != RuntimeState::Running)
+            .map(|_| Unavailable::VmState {
+                detail: "start the VM before using quick launch".into(),
+            }),
         ActionKind::UsbAttach { vm, bus_id } => usb_attach_block(state, vm, bus_id),
         ActionKind::UsbDetach { vm, bus_id } => usb_detach_block(state, vm, bus_id),
         ActionKind::StoreVerify { .. } | ActionKind::Build { .. } | ActionKind::Boot { .. } => None,
@@ -138,7 +143,8 @@ pub fn plan(
         ActionKind::StoreVerify { vm } => socket(SocketIntent::StoreVerify { vm: vm.clone() }),
         ActionKind::Refresh => socket(SocketIntent::List),
         ActionKind::LaunchTerminal { vm } => terminal_argv(vm, config),
-        ActionKind::OpenObservability => observability_argv(config)?,
+        ActionKind::QuickLaunch { vm, id } => quick_launch_argv(vm, id, config)?,
+        ActionKind::OpenObservability => observability_argv(config),
         ActionKind::AudioMic { .. }
         | ActionKind::AudioSpeaker { .. }
         | ActionKind::AudioOff { .. } => return Err(Unavailable::NotYetImplemented),
@@ -162,10 +168,20 @@ fn availability(action: ActionKind, state: &WlState, config: &Config) -> ActionA
 }
 
 fn config_block_reason(action: &ActionKind, config: &Config) -> Option<Unavailable> {
-    if matches!(action, ActionKind::LaunchTerminal { .. }) {
+    if matches!(
+        action,
+        ActionKind::LaunchTerminal { .. } | ActionKind::QuickLaunch { .. }
+    ) {
         return config.validate().err().map(|err| Unavailable::Blocked {
             detail: err.to_string(),
         });
+    }
+    if let ActionKind::QuickLaunch { vm, id } = action {
+        if quick_launch_config(vm, id, config).is_none() {
+            return Some(Unavailable::Blocked {
+                detail: format!("quick launch '{id}' is not configured for {vm}"),
+            });
+        }
     }
     if matches!(action, ActionKind::OpenObservability) {
         if let Err(err) = config.validate() {
@@ -190,6 +206,7 @@ fn config_block_reason(action: &ActionKind, config: &Config) -> Option<Unavailab
 fn required_role(action: &ActionKind) -> AuthRole {
     match action {
         ActionKind::LaunchTerminal { .. }
+        | ActionKind::QuickLaunch { .. }
         | ActionKind::Start { .. }
         | ActionKind::Stop { .. }
         | ActionKind::Restart { .. }
@@ -280,6 +297,33 @@ fn terminal_argv(vm: &str, config: &Config) -> PlannedAction {
     PlannedAction::Process { argv, wait: true }
 }
 
+fn quick_launch_argv(vm: &str, id: &str, config: &Config) -> Result<PlannedAction, Unavailable> {
+    let item = quick_launch_config(vm, id, config).ok_or_else(|| Unavailable::Blocked {
+        detail: format!("quick launch '{id}' is not configured for {vm}"),
+    })?;
+    let mut argv = vec![
+        "nixling".to_owned(),
+        "vm".to_owned(),
+        "exec".to_owned(),
+        "-d".to_owned(),
+        vm.to_owned(),
+        "--".to_owned(),
+    ];
+    argv.extend(item.guest_argv.clone());
+    Ok(PlannedAction::Process { argv, wait: true })
+}
+
+fn quick_launch_config<'a>(
+    vm: &str,
+    id: &str,
+    config: &'a Config,
+) -> Option<&'a crate::config::QuickLaunchConfig> {
+    config
+        .quick_launch
+        .iter()
+        .find(|item| item.vm == vm && item.id == id)
+}
+
 fn build_argv(vm: &str) -> PlannedAction {
     PlannedAction::Process {
         argv: vec!["nixling".to_owned(), "build".to_owned(), vm.to_owned()],
@@ -287,25 +331,12 @@ fn build_argv(vm: &str) -> PlannedAction {
     }
 }
 
-fn observability_argv(config: &Config) -> Result<PlannedAction, Unavailable> {
-    if !config.observability.enabled {
-        return Err(Unavailable::Blocked {
-            detail: "observability is disabled".into(),
-        });
-    }
-    let Some(url) = &config.observability.url else {
-        return Err(Unavailable::Blocked {
-            detail: "observability.url is not configured".into(),
-        });
-    };
+fn observability_argv(config: &Config) -> PlannedAction {
     let mut argv = config.observability.browser_argv.clone();
-    if argv.is_empty() {
-        return Err(Unavailable::Blocked {
-            detail: "observability.browser_argv must contain at least one argv element".into(),
-        });
+    if let Some(url) = &config.observability.url {
+        argv.push(url.clone());
     }
-    argv.push(url.clone());
-    Ok(PlannedAction::Process { argv, wait: false })
+    PlannedAction::Process { argv, wait: false }
 }
 
 #[cfg(test)]
@@ -727,8 +758,49 @@ mod tests {
         assert_eq!(
             planned,
             PlannedAction::Process {
-                argv: vec!["xdg-open".into(), "http://127.0.0.1:3301".into()],
+                argv: vec!["xdg-open".into(), "http://sys-obs:8080".into()],
                 wait: false,
+            }
+        );
+    }
+
+    #[test]
+    fn quick_launch_uses_configured_detached_guest_argv() {
+        let state = connected_state(AuthRole::Admin, vec![vm("work-ssd", RuntimeState::Running)]);
+        let config = Config {
+            quick_launch: vec![crate::config::QuickLaunchConfig {
+                id: "run-openterface".into(),
+                vm: "work-ssd".into(),
+                icon: "desktop_windows".into(),
+                tooltip: "Run Openterface".into(),
+                guest_argv: vec!["/run/current-system/sw/bin/openterface-run".into()],
+            }],
+            ..Default::default()
+        };
+
+        let planned = plan(
+            &ActionKind::QuickLaunch {
+                vm: "work-ssd".into(),
+                id: "run-openterface".into(),
+            },
+            &state,
+            &config,
+        )
+        .expect("quick launch plannable");
+
+        assert_eq!(
+            planned,
+            PlannedAction::Process {
+                argv: vec![
+                    "nixling".into(),
+                    "vm".into(),
+                    "exec".into(),
+                    "-d".into(),
+                    "work-ssd".into(),
+                    "--".into(),
+                    "/run/current-system/sw/bin/openterface-run".into()
+                ],
+                wait: true,
             }
         );
     }

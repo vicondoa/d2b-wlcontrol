@@ -31,8 +31,15 @@ guest_argv = ["/run/current-system/sw/bin/foot"]
 # Signoz URL to open. Auto-login is intentionally deferred; the browser's
 # existing session is used if one exists.
 enabled = true
-url = "http://127.0.0.1:3301"
+url = "http://sys-obs:8080"
 browser_argv = ["xdg-open"]
+
+[[quick_launch]]
+id = "run-openterface"
+vm = "work-ssd"
+icon = "desktop_windows"
+tooltip = "Run Openterface"
+guest_argv = ["/run/current-system/sw/bin/openterface-run"]
 ```
 
 ## Options
@@ -49,8 +56,9 @@ browser_argv = ["xdg-open"]
 | `terminal.guest_argv` | array of string | `["/run/current-system/sw/bin/foot"]` | Guest terminal argv launched detached inside the VM. |
 | `terminal.guest_shell` | string | `bash` | Legacy fallback used only if `terminal.guest_argv = []`. |
 | `observability.enabled` | bool | `true` | Whether to show/use the observability portal action. |
-| `observability.url` | string | `http://127.0.0.1:3301` | Signoz portal URL opened by the header button. |
+| `observability.url` | string | `http://sys-obs:8080` | Signoz portal URL opened by the header button. |
 | `observability.browser_argv` | array of string | `["xdg-open"]` | Browser/open command prefix for `observability.url`. |
+| `quick_launch[]` | table array | `[]` | Per-VM custom quick-launch icon. Fields: `id`, `vm`, `icon`, `tooltip`, `guest_argv`. |
 
 ## Terminal command is argv, not a shell string
 
@@ -79,3 +87,10 @@ The observability button opens `observability.url` with
 button/action. It does not read Signoz credentials, generate cookies, or perform
 auto-login; if your browser is already logged in, that session is reused by the
 browser.
+
+## Per-VM quick-launch icons
+
+`[[quick_launch]]` entries add custom icon buttons to the always-visible icon
+row before USB controls. Each entry is VM-scoped and launches a detached guest
+command with `nixling vm exec -d <vm> -- ${guest_argv...}`. `icon` is a Material
+Symbols name and `tooltip` is the hover text.

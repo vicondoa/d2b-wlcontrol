@@ -84,6 +84,15 @@ pub struct VmFeatures {
     pub audio: bool,
 }
 
+/// A custom per-VM quick-launch icon surfaced by the popup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickLaunchIcon {
+    pub id: String,
+    pub icon: String,
+    pub tooltip: String,
+}
+
 /// A normalized VM as presented to the UI surfaces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -116,6 +125,9 @@ pub struct Vm {
     /// USB claims associated with this VM.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usb: Vec<UsbClaim>,
+    /// Configured custom quick-launch icons for this VM.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quick_launch: Vec<QuickLaunchIcon>,
 }
 
 /// Connectivity / authorization posture for the whole control surface.
@@ -208,6 +220,8 @@ pub enum ActionKind {
     StoreVerify { vm: String },
     /// Launch a guest terminal with detached guest-control exec.
     LaunchTerminal { vm: String },
+    /// Run a configured custom guest quick-launch command.
+    QuickLaunch { vm: String, id: String },
     /// Toggle microphone forwarding for a VM (disabled until nixling supports it).
     AudioMic { vm: String, on: bool },
     /// Toggle speaker forwarding for a VM (disabled until nixling supports it).
@@ -330,6 +344,7 @@ mod tests {
                     static_ip: None,
                     readiness: vec![],
                     usb: vec![],
+                    quick_launch: vec![],
                 },
                 Vm {
                     name: "sys-work-net".into(),
@@ -342,6 +357,7 @@ mod tests {
                     static_ip: None,
                     readiness: vec![],
                     usb: vec![],
+                    quick_launch: vec![],
                 },
             ],
             stale: false,
@@ -369,6 +385,7 @@ mod tests {
             static_ip: None,
             readiness: vec![],
             usb: vec![],
+            quick_launch: vec![],
         });
         assert!(state.needs_attention());
     }
@@ -389,6 +406,7 @@ mod tests {
                 static_ip: None,
                 readiness: vec![],
                 usb: vec![],
+                quick_launch: vec![],
             }],
             stale: false,
             note: None,

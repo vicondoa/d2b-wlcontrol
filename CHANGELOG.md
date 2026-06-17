@@ -39,8 +39,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
   heading, can be dragged after opening, fits its VM list up to a half-screen
   cap with a thin scrollbar, sorts `sys-*` VMs to the bottom, shows
   human-readable action feedback, exposes verify/build/boot/switch as
-  icon-only system controls, launches guest terminals via detached exec, and
-  adds a Signoz observability URL button without auto-login handling.
+  icon-only system controls, supports config-driven per-VM quick-launch icons,
+  launches guest terminals via detached exec, and adds a Signoz observability
+  URL button without auto-login handling.
 - **Safety model.** Public socket only (never the broker socket), no
   `sudo`, no nixling state-file mutation, argv-only command execution,
   and authorization derived from `nixling auth status`.

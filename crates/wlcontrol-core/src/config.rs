@@ -54,6 +54,8 @@ pub struct Config {
     pub terminal: TerminalConfig,
     /// Observability portal launch configuration.
     pub observability: ObservabilityConfig,
+    /// Per-VM custom guest quick-launch icons.
+    pub quick_launch: Vec<QuickLaunchConfig>,
 }
 
 /// Terminal launch configuration. The guest command is always an argv vector;
@@ -81,6 +83,24 @@ pub struct ObservabilityConfig {
     pub url: Option<String>,
     /// argv prefix used to open the URL, e.g. `["xdg-open"]`.
     pub browser_argv: Vec<String>,
+    /// Message shown by the popup after successfully launching observability.
+    pub success_message: String,
+}
+
+/// A per-VM quick-launch icon that runs a detached guest command.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub struct QuickLaunchConfig {
+    /// Stable action id used by `nixling-wlcontrol action quick-launch`.
+    pub id: String,
+    /// VM this icon appears on.
+    pub vm: String,
+    /// Material Symbols icon name.
+    pub icon: String,
+    /// Hover text shown in the popup.
+    pub tooltip: String,
+    /// Guest argv launched with `nixling vm exec -d <vm> -- ...`.
+    pub guest_argv: Vec<String>,
 }
 
 impl Default for Config {
@@ -95,6 +115,7 @@ impl Default for Config {
             hidden_vms: Vec::new(),
             terminal: TerminalConfig::default(),
             observability: ObservabilityConfig::default(),
+            quick_launch: Vec::new(),
         }
     }
 }
@@ -113,8 +134,9 @@ impl Default for ObservabilityConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            url: Some("http://127.0.0.1:3301".to_owned()),
+            url: Some("http://sys-obs:8080".to_owned()),
             browser_argv: vec!["xdg-open".to_owned()],
+            success_message: "Opened observability portal".to_owned(),
         }
     }
 }
@@ -147,6 +169,29 @@ impl Config {
             return Err(WlError::Config(
                 "observability.browser_argv must contain at least one argv element".into(),
             ));
+        }
+        for item in &self.quick_launch {
+            if item.id.trim().is_empty() {
+                return Err(WlError::Config("quick_launch.id must not be empty".into()));
+            }
+            if item.vm.trim().is_empty() {
+                return Err(WlError::Config("quick_launch.vm must not be empty".into()));
+            }
+            if item.icon.trim().is_empty() {
+                return Err(WlError::Config(
+                    "quick_launch.icon must not be empty".into(),
+                ));
+            }
+            if item.tooltip.trim().is_empty() {
+                return Err(WlError::Config(
+                    "quick_launch.tooltip must not be empty".into(),
+                ));
+            }
+            if item.guest_argv.is_empty() {
+                return Err(WlError::Config(
+                    "quick_launch.guest_argv must contain at least one argv element".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -188,11 +233,13 @@ mod tests {
         assert_eq!(c.terminal.guest_shell, "bash");
         assert_eq!(c.terminal.guest_argv, ["/run/current-system/sw/bin/foot"]);
         assert!(c.observability.enabled);
-        assert_eq!(
-            c.observability.url.as_deref(),
-            Some("http://127.0.0.1:3301")
-        );
+        assert_eq!(c.observability.url.as_deref(), Some("http://sys-obs:8080"));
         assert_eq!(c.observability.browser_argv, ["xdg-open"]);
+        assert_eq!(
+            c.observability.success_message,
+            "Opened observability portal"
+        );
+        assert!(c.quick_launch.is_empty());
     }
 
     #[test]
@@ -262,6 +309,40 @@ browser_argv = []
         )
         .expect("disabled observability should not require a browser");
         assert!(!c.observability.enabled);
+    }
+
+    #[test]
+    fn parses_quick_launch_items() {
+        let c = Config::from_toml(
+            r#"
+[[quick_launch]]
+id = "run-openterface"
+vm = "work-ssd"
+icon = "desktop_windows"
+tooltip = "Run Openterface"
+guest_argv = ["/run/current-system/sw/bin/openterface-run"]
+"#,
+        )
+        .expect("parse quick launch");
+
+        assert_eq!(c.quick_launch.len(), 1);
+        assert_eq!(c.quick_launch[0].id, "run-openterface");
+        assert_eq!(c.quick_launch[0].vm, "work-ssd");
+    }
+
+    #[test]
+    fn rejects_incomplete_quick_launch_items() {
+        let err = Config::from_toml(
+            r#"
+[[quick_launch]]
+id = "broken"
+vm = "work-ssd"
+icon = "desktop_windows"
+tooltip = "Broken"
+"#,
+        )
+        .expect_err("quick launch without argv should fail");
+        assert!(matches!(err, WlError::Config(msg) if msg.contains("quick_launch.guest_argv")));
     }
 
     #[test]
