@@ -15,7 +15,7 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
       pkgsFor = system: import nixpkgs { inherit system; };
 
-      runtimeBins = pkgs: with pkgs; [ quickshell ];
+      runtimeBins = pkgs: with pkgs; [ quickshell xdg-utils ];
       runtimeFonts = pkgs: with pkgs; [ material-symbols ];
     in
     {
@@ -75,6 +75,7 @@
               clippy
               rustfmt
               quickshell
+              xdg-utils
               material-symbols
             ];
           };

@@ -12,7 +12,8 @@ The tool talks **only** to operator-facing surfaces:
   (non-abstract `SOCK_SEQPACKET`, 4-byte little-endian length-prefixed
   JSON frames, `SO_PEERCRED` authorization); and
 - the official `nixling` CLI, used only where it is the better boundary
-  (interactive terminal exec, which owns the PTY/raw-mode behavior).
+  (detached guest terminal exec and non-shell build); and
+- the configured browser opener for the observability URL.
 
 Authorization is whatever nixlingd grants the calling user via
 `SO_PEERCRED` + group membership. `nixling-wlcontrol` adds **no**
@@ -33,6 +34,8 @@ daemon would reject anyway.
   derived from `nixling auth status`, never from inspecting file
   permissions.
 - **No XWayland assumptions.**
+- **No observability credential handling.** The Signoz button opens a URL only;
+  auto-login/token/cookie handling is out of scope.
 
 ## Failure posture
 

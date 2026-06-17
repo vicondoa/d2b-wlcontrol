@@ -110,6 +110,21 @@ fn vm_start_dispatch_returns_applied_summary() {
 }
 
 #[test]
+fn boot_dispatch_returns_applied_summary() {
+    let server = FakeNixlingd::start(FakeMode::BootOk);
+    let client = client_for(server.path());
+
+    let outcome = client
+        .dispatch(&SocketIntent::Boot {
+            vm: "corp-vm".to_owned(),
+        })
+        .expect("dispatch");
+
+    assert_eq!(outcome.summary, "staged corp-vm for next boot");
+    server.join();
+}
+
+#[test]
 fn mutating_non_applied_outcomes_map_to_typed_errors() {
     let cases = [
         (
@@ -312,6 +327,7 @@ enum FakeMode {
     Refresh,
     RejectHello,
     VmStartOk,
+    BootOk,
     MutatingDryRunPlanned,
     MutatingApiReadyTimeout,
     MutatingNotYetImplemented,
@@ -467,6 +483,16 @@ fn assert_request_shape(request: &Value, request_type: &str) {
                 "json": true
             })
         ),
+        "boot" => assert_eq!(
+            request,
+            &json!({
+                "type": "boot",
+                "vm": "corp-vm",
+                "dryRun": false,
+                "apply": true,
+                "json": true
+            })
+        ),
         other => panic!("unexpected request type {other}"),
     }
 }
@@ -520,6 +546,9 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
             }]
         }),
         (FakeMode::VmStartOk, "vmStart") => mutating_response("applied", "started corp-vm", ""),
+        (FakeMode::BootOk, "boot") => {
+            mutating_response("applied", "staged corp-vm for next boot", "")
+        }
         (FakeMode::MutatingDryRunPlanned, "vmStart") => {
             mutating_response("dry-run-planned", "planned only", "use --apply")
         }

@@ -62,7 +62,15 @@ pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
 
     let vms = ordered_inventory(inventory.vms, &config.favorites)
         .into_iter()
-        .map(|inv| build_vm(inv, &statuses, &usb_claims, &hidden_names))
+        .map(|inv| {
+            build_vm(
+                inv,
+                &statuses,
+                &usb_claims,
+                &hidden_names,
+                config.show_pending_restart,
+            )
+        })
         .collect();
 
     WlState {
@@ -79,6 +87,7 @@ fn build_vm(
     statuses: &[VmStatus],
     usb_claims: &[UsbClaim],
     hidden_names: &HashSet<&str>,
+    show_pending_restart: bool,
 ) -> Vm {
     let status = statuses.iter().find(|s| s.name == inv.name);
     let is_net_vm = inv.is_net_vm || is_framework_net_vm_name(&inv.name);
@@ -99,7 +108,7 @@ fn build_vm(
         state,
         is_net_vm,
         hidden,
-        pending_restart: status.map(|s| s.pending_restart).unwrap_or(false),
+        pending_restart: show_pending_restart && status.map(|s| s.pending_restart).unwrap_or(false),
         features: inv.features,
         static_ip: inv.static_ip,
         readiness: status.map(|s| s.readiness.clone()).unwrap_or_default(),
@@ -123,6 +132,7 @@ fn ordered_inventory(vms: Vec<InventoryVm>, favorites: &[String]) -> Vec<Invento
     }
 
     ordered.extend(remaining.into_iter().flatten());
+    ordered.sort_by_key(|vm| vm.name.starts_with("sys-"));
     ordered
 }
 
@@ -287,6 +297,40 @@ mod tests {
     }
 
     #[test]
+    fn sys_vms_sort_after_ordinary_vms_even_when_favorited() {
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![
+                    inventory_vm("sys-work-helper", Some("stopped")),
+                    inventory_vm("work-a", Some("stopped")),
+                    inventory_vm("sys-work-net", Some("stopped")),
+                    inventory_vm("work-b", Some("stopped")),
+                ],
+            }),
+            ..Default::default()
+        };
+        let config = Config {
+            favorites: vec!["sys-work-net".into(), "work-b".into()],
+            ..Default::default()
+        };
+
+        let state = reduce_with_config(input, &config);
+
+        assert_eq!(
+            state
+                .vms
+                .iter()
+                .map(|vm| vm.name.as_str())
+                .collect::<Vec<_>>(),
+            ["work-b", "work-a", "sys-work-net", "sys-work-helper"]
+        );
+    }
+
+    #[test]
     fn missing_status_for_running_inventory_becomes_unknown_attention() {
         let input = ReduceInput {
             connectivity: Connectivity::Connected,
@@ -324,5 +368,31 @@ mod tests {
         let state = reduce(input);
         assert_eq!(state.vms[0].state, RuntimeState::Unknown);
         assert!(state.needs_attention());
+    }
+
+    #[test]
+    fn pending_restart_can_be_hidden_by_config() {
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![inventory_vm("corp-vm", Some("running"))],
+            }),
+            statuses: vec![VmStatus {
+                name: "corp-vm".into(),
+                state: RuntimeState::Running,
+                pending_restart: true,
+                readiness: vec![],
+            }],
+            ..Default::default()
+        };
+        let config = Config {
+            show_pending_restart: false,
+            ..Default::default()
+        };
+        let state = reduce_with_config(input, &config);
+        assert!(!state.vms[0].pending_restart);
     }
 }

@@ -62,7 +62,7 @@ struct Cli {
 enum Command {
     /// Run the continuous Waybar custom JSON module.
     Waybar,
-    /// Open (or focus) the GTK control center.
+    /// Open (or focus) the Quickshell control center.
     Open,
     /// Print the normalized control-surface state as JSON.
     StatusJson,
@@ -95,7 +95,11 @@ enum ActionCommand {
     Restart { vm: String },
     /// Activate a VM's current closure.
     Switch { vm: String },
-    /// Launch a terminal running an interactive guest shell.
+    /// Build/evaluate a VM without activating it.
+    Build { vm: String },
+    /// Stage a VM closure for the next boot.
+    Boot { vm: String },
+    /// Launch a guest terminal via detached guest-control exec.
     Terminal { vm: String },
     /// Attach a USB busid to a VM.
     UsbAttach { vm: String, bus_id: String },
@@ -103,6 +107,8 @@ enum ActionCommand {
     UsbDetach { vm: String, bus_id: String },
     /// Verify a VM's store live pool.
     StoreVerify { vm: String },
+    /// Open the configured Signoz observability portal.
+    Observability,
 }
 
 impl ActionCommand {
@@ -115,10 +121,13 @@ impl ActionCommand {
             ActionCommand::Stop { vm } => ActionKind::Stop { vm },
             ActionCommand::Restart { vm } => ActionKind::Restart { vm },
             ActionCommand::Switch { vm } => ActionKind::Switch { vm },
+            ActionCommand::Build { vm } => ActionKind::Build { vm },
+            ActionCommand::Boot { vm } => ActionKind::Boot { vm },
             ActionCommand::Terminal { vm } => ActionKind::LaunchTerminal { vm },
             ActionCommand::UsbAttach { vm, bus_id } => ActionKind::UsbAttach { vm, bus_id },
             ActionCommand::UsbDetach { vm, bus_id } => ActionKind::UsbDetach { vm, bus_id },
             ActionCommand::StoreVerify { vm } => ActionKind::StoreVerify { vm },
+            ActionCommand::Observability => ActionKind::OpenObservability,
         }
     }
 }
@@ -220,10 +229,9 @@ fn usb_device_from_sysfs(path: &Path) -> Option<UsbDeviceOutput> {
     let product = read_trimmed(path.join("product"));
     // Root hubs and generic hubs are rarely useful attach targets; keep
     // anything with a product string, but skip empty/generic hub-only rows.
-    if product
-        .as_deref()
-        .is_some_and(|p| p.eq_ignore_ascii_case("USB2.0 Hub") || p.eq_ignore_ascii_case("USB3.0 Hub"))
-    {
+    if product.as_deref().is_some_and(|p| {
+        p.eq_ignore_ascii_case("USB2.0 Hub") || p.eq_ignore_ascii_case("USB3.0 Hub")
+    }) {
         return None;
     }
     let label = match (manufacturer.as_deref(), product.as_deref()) {
@@ -242,7 +250,10 @@ fn usb_device_from_sysfs(path: &Path) -> Option<UsbDeviceOutput> {
 }
 
 fn read_trimmed(path: impl AsRef<Path>) -> Option<String> {
-    fs::read_to_string(path).ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+    fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
 }
 
 fn run_waybar(config: &Config) -> wlcontrol_core::WlResult<ExitCode> {
@@ -305,7 +316,7 @@ fn run_action(config: &Config, action: ActionKind) -> wlcontrol_core::WlResult<E
             }
             Err(err) => Err(err),
         },
-        Ok(PlannedAction::Process { argv }) => spawn_process(argv),
+        Ok(PlannedAction::Process { argv, wait }) => run_process(argv, wait, config),
         Err(reason) => {
             eprintln!(
                 "nixling-wlcontrol: action unavailable: {}",
@@ -319,7 +330,10 @@ fn run_action(config: &Config, action: ActionKind) -> wlcontrol_core::WlResult<E
 fn action_planning_state(config: &Config, action: &ActionKind) -> WlState {
     if matches!(
         action,
-        ActionKind::Refresh | ActionKind::OpenControlCenter | ActionKind::CycleDisplay
+        ActionKind::Refresh
+            | ActionKind::OpenControlCenter
+            | ActionKind::OpenObservability
+            | ActionKind::CycleDisplay
     ) {
         WlState::default()
     } else {
@@ -327,16 +341,43 @@ fn action_planning_state(config: &Config, action: &ActionKind) -> WlState {
     }
 }
 
-/// Spawn an argv-only host process (terminal launch). There is no shell
-/// interpretation: the first element is the program and the rest are arguments.
-fn spawn_process(argv: Vec<String>) -> wlcontrol_core::WlResult<ExitCode> {
+/// Run an argv-only host process. There is no shell interpretation: the first
+/// element is the program and the rest are arguments.
+fn run_process(
+    argv: Vec<String>,
+    wait: bool,
+    config: &Config,
+) -> wlcontrol_core::WlResult<ExitCode> {
     let Some((program, args)) = argv.split_first() else {
         return Err(wlcontrol_core::WlError::Config(
-            "empty terminal argv; check [terminal] config".to_owned(),
+            "empty process argv".to_owned(),
         ));
     };
-    std::process::Command::new(program).args(args).spawn()?;
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    if is_nixling_program(program) {
+        command.env("NIXLING_PUBLIC_SOCKET", &config.public_socket);
+    }
+    if wait {
+        let output = command.output()?;
+        std::io::stdout().write_all(&output.stdout)?;
+        std::io::stderr().write_all(&output.stderr)?;
+        let code = output
+            .status
+            .code()
+            .and_then(|code| u8::try_from(code).ok())
+            .map_or(ExitCode::FAILURE, ExitCode::from);
+        return Ok(code);
+    }
+    command.spawn()?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn is_nixling_program(program: &str) -> bool {
+    Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("nixling")
 }
 
 extern "C" fn waybar_signal_handler(_signal: c_int) {

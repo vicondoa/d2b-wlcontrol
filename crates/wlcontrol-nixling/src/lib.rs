@@ -176,6 +176,9 @@ impl NixlingClient {
             SocketIntent::Switch { vm } => {
                 dispatch_mutating(&transport, "switch", json_object([("vm", vm.clone())]))
             }
+            SocketIntent::Boot { vm } => {
+                dispatch_mutating(&transport, "boot", json_object([("vm", vm.clone())]))
+            }
             SocketIntent::UsbAttach { vm, bus_id } => dispatch_mutating(
                 &transport,
                 "usbipBind",

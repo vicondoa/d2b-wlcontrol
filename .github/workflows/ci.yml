@@ -33,6 +33,9 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+      - name: QML embedded smoke
+        run: cargo test -p wlcontrol-ui qml_source_smoke -- --nocapture
+
   flake:
     name: Nix flake check
     runs-on: ubuntu-latest

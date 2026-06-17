@@ -83,6 +83,8 @@ pub(crate) fn action_label(action: &ActionKind) -> String {
         ActionKind::Stop { .. } => "Stop".to_owned(),
         ActionKind::Restart { .. } => "Restart".to_owned(),
         ActionKind::Switch { .. } => "Switch".to_owned(),
+        ActionKind::Build { .. } => "Build".to_owned(),
+        ActionKind::Boot { .. } => "Boot".to_owned(),
         ActionKind::UsbAttach { bus_id, .. } => format!("USB attach {bus_id}"),
         ActionKind::UsbDetach { bus_id, .. } => format!("USB detach {bus_id}"),
         ActionKind::StoreVerify { .. } => "Store verify".to_owned(),
@@ -91,6 +93,7 @@ pub(crate) fn action_label(action: &ActionKind) -> String {
         ActionKind::AudioSpeaker { .. } => "Speaker".to_owned(),
         ActionKind::AudioOff { .. } => "Audio off".to_owned(),
         ActionKind::OpenControlCenter => "Open control center".to_owned(),
+        ActionKind::OpenObservability => "Open observability".to_owned(),
         ActionKind::CycleDisplay => "Cycle display".to_owned(),
     }
 }
@@ -117,6 +120,8 @@ pub(crate) fn action_vm_name(action: &ActionKind) -> Option<&str> {
         | ActionKind::Stop { vm }
         | ActionKind::Restart { vm }
         | ActionKind::Switch { vm }
+        | ActionKind::Build { vm }
+        | ActionKind::Boot { vm }
         | ActionKind::UsbAttach { vm, .. }
         | ActionKind::UsbDetach { vm, .. }
         | ActionKind::StoreVerify { vm }
@@ -124,7 +129,10 @@ pub(crate) fn action_vm_name(action: &ActionKind) -> Option<&str> {
         | ActionKind::AudioMic { vm, .. }
         | ActionKind::AudioSpeaker { vm, .. }
         | ActionKind::AudioOff { vm } => Some(vm.as_str()),
-        ActionKind::Refresh | ActionKind::OpenControlCenter | ActionKind::CycleDisplay => None,
+        ActionKind::Refresh
+        | ActionKind::OpenControlCenter
+        | ActionKind::OpenObservability
+        | ActionKind::CycleDisplay => None,
     }
 }
 
@@ -269,9 +277,9 @@ mod tests {
             (Unavailable::NotYetImplemented, "unsupported"),
             (
                 Unavailable::Blocked {
-                    detail: "terminal.argv must not be empty".to_owned(),
+                    detail: "terminal.guest_argv must not be empty".to_owned(),
                 },
-                "terminal.argv",
+                "terminal.guest_argv",
             ),
         ];
 
@@ -301,6 +309,49 @@ mod tests {
             state_badge(RuntimeState::Unknown).css_class,
             "state-unknown"
         );
+    }
+
+    #[test]
+    fn action_labels_cover_store_and_observability_actions() {
+        assert_eq!(
+            action_label(&ActionKind::Build {
+                vm: "corp-vm".to_owned()
+            }),
+            "Build"
+        );
+        assert_eq!(
+            action_label(&ActionKind::Boot {
+                vm: "corp-vm".to_owned()
+            }),
+            "Boot"
+        );
+        assert_eq!(
+            action_label(&ActionKind::OpenObservability),
+            "Open observability"
+        );
+    }
+
+    #[test]
+    fn role_indicator_and_action_vm_name_are_human_readable() {
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            ..Default::default()
+        };
+        assert_eq!(role_indicator(&state), "role: admin");
+        assert_eq!(
+            action_vm_name(&ActionKind::Boot {
+                vm: "corp-vm".to_owned()
+            }),
+            Some("corp-vm")
+        );
+        assert_eq!(action_vm_name(&ActionKind::OpenObservability), None);
+    }
+
+    #[test]
+    fn empty_group_message_distinguishes_internal_filter() {
+        assert!(empty_group_message(false).contains("Internal"));
+        assert!(empty_group_message(true).contains("No VMs"));
     }
 
     #[test]

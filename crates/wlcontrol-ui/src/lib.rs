@@ -15,6 +15,9 @@ use std::{
 
 use wlcontrol_core::{Config, WlError, WlResult};
 
+#[cfg(test)]
+mod view_model;
+
 const QML_FILE: &str = "shell.qml";
 const PID_FILE: &str = "quickshell.pid";
 const SIGTERM: i32 = 15;
@@ -34,7 +37,7 @@ struct ProcessIdentity {
 /// A running frontend is hidden by terminating its Quickshell process. The next
 /// invocation starts a fresh instance. This intentionally matches Waybar popup
 /// ergonomics: click once to show, click again to hide.
-pub fn open(_config: &Config) -> WlResult<()> {
+pub fn open(config: &Config) -> WlResult<()> {
     let dir = runtime_dir()?;
     fs::create_dir_all(&dir)?;
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
@@ -59,6 +62,14 @@ pub fn open(_config: &Config) -> WlResult<()> {
         .arg(&qml_path)
         .arg("--no-duplicate")
         .env("NIXLING_WLCONTROL_BIN", backend)
+        .env(
+            "NIXLING_WLCONTROL_OBSERVABILITY_ENABLED",
+            if config.observability.enabled && config.observability.url.is_some() {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -186,7 +197,7 @@ fn cmdline_matches_quickshell(pid: u32, runtime_dir: &Path) -> bool {
 /// Notes:
 /// - Uses argv-vector `Process` commands; no shell strings.
 /// - Colours are explicit Catppuccin/Waybar-style tokens.
-/// - The panel is a fixed-size layer-shell overlay in the top-right.
+/// - The panel is a draggable layer-shell overlay anchored near the top-right.
 const QML_SOURCE: &str = r##"
 //@ pragma StateDir $XDG_STATE_HOME/nixling-wlcontrol/quickshell
 //@ pragma IconTheme Adwaita
@@ -205,10 +216,22 @@ ShellRoot {
   property string hoverHint: ""
   property string actionMessage: ""
   property bool actionFailed: false
+  property bool actionBusy: false
+  property real panelTopMargin: 8
+  property real panelRightMargin: 8
+  property string confirmKey: ""
+  property bool observabilityEnabled: Quickshell.env("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED") === "1"
 
   function visibleVms() {
     const vms = state.vms || []
-    return vms.filter(v => !v.isNetVm && !v.hidden)
+    return vms
+      .map((vm, index) => ({ vm: vm, index: index }))
+      .filter(entry => !entry.vm.isNetVm && !entry.vm.hidden)
+      .sort((a, b) => {
+        const sysDiff = Number((a.vm.name || "").startsWith("sys-")) - Number((b.vm.name || "").startsWith("sys-"))
+        return sysDiff !== 0 ? sysDiff : a.index - b.index
+      })
+      .map(entry => entry.vm)
   }
 
   function runningCount() {
@@ -237,7 +260,6 @@ ShellRoot {
   }
 
   function reload() {
-    if (!busy && actionMessage === "done") actionMessage = ""
     statusProc.exec([backend, "status-json"])
   }
 
@@ -247,8 +269,11 @@ ShellRoot {
 
   function action(args) {
     busy = true
-    actionMessage = "running " + args.join(" ")
+    actionBusy = true
+    actionMessage = runningMessage(args)
     actionFailed = false
+    actionClearTimer.stop()
+    actionProc.args = args
     actionProc.exec([backend, "action"].concat(args))
   }
 
@@ -283,20 +308,24 @@ ShellRoot {
     return state.connectivity === "connected" && state.role !== "none" && !busy
   }
 
+  function canAdminMutate() {
+    return state.connectivity === "connected" && state.role === "admin" && !busy
+  }
+
   function canStart(vm) {
-    return canMutate() && vm.state !== "running"
+    return canAdminMutate() && vm.state !== "running"
   }
 
   function canStop(vm) {
-    return canMutate() && vm.state === "running"
+    return canAdminMutate() && vm.state === "running"
   }
 
   function canAdvanced(vm) {
-    return canMutate() && vm.state === "running"
+    return canAdminMutate() && vm.state === "running"
   }
 
   function canUsb(vm, u) {
-    return canMutate() && (!u.ownerVm || u.ownerVm === vm.name)
+    return canAdminMutate() && (!u.ownerVm || u.ownerVm === vm.name)
   }
 
   function usbLabel(u) {
@@ -306,14 +335,105 @@ ShellRoot {
   }
 
   function usbTooltip(vm, u) {
-    if (u.ownerVm && u.ownerVm !== vm.name) return "USB " + u.busId + " is owned by " + u.ownerVm
-    return (u.bound ? "Detach USB " : "Attach USB ") + u.busId
+    const device = usbDevice(u.busId)
+    const name = device ? device.label : "USB " + u.busId
+    if (u.ownerVm && u.ownerVm !== vm.name) return name + " is owned by " + u.ownerVm
+    return (u.bound ? "Detach " : "Attach ") + name
+  }
+
+  function usbDevice(busId) {
+    const devices = usbDevices || []
+    for (let i = 0; i < devices.length; i++) {
+      if (devices[i].busId === busId) return devices[i]
+    }
+    return null
   }
 
   function shortDeviceLabel(device) {
     const product = device.product || device.label || "USB device"
     const name = product.length > 18 ? product.substring(0, 17) + "…" : product
     return name + " " + device.busId
+  }
+
+  function runningMessage(args) {
+    const verb = args[0] || "action"
+    const vm = args[1] || ""
+    if (verb === "usb-attach") return "Attaching USB to " + vm + "..."
+    if (verb === "usb-detach") return "Detaching USB from " + vm + "..."
+    if (verb === "terminal") return "Opening terminal in " + vm + "..."
+    if (verb === "build") return "Building " + vm + "..."
+    if (verb === "boot") return "Staging " + vm + " for next boot..."
+    if (verb === "switch") return "Switching " + vm + "..."
+    if (verb === "store-verify") return "Verifying store for " + vm + "..."
+    if (verb === "observability") return "Opening observability..."
+    if (verb === "restart") return "Restarting " + vm + "..."
+    if (verb === "start") return "Starting " + vm + "..."
+    if (verb === "stop") return "Stopping " + vm + "..."
+    return "Working..."
+  }
+
+  function successMessage(args) {
+    const verb = args[0] || "action"
+    const vm = args[1] || ""
+    if (verb === "usb-attach") return "USB attached to " + vm
+    if (verb === "usb-detach") return "USB detached from " + vm
+    if (verb === "terminal") return "Terminal launch requested for " + vm
+    if (verb === "build") return "Build completed for " + vm
+    if (verb === "boot") return "Boot generation staged for " + vm
+    if (verb === "switch") return "Switched " + vm
+    if (verb === "store-verify") return "Store verified for " + vm
+    if (verb === "observability") return "Opened observability portal"
+    if (verb === "restart") return "Restarted " + vm
+    if (verb === "start") return "Started " + vm
+    if (verb === "stop") return "Stopped " + vm
+    return "Done"
+  }
+
+  function screenWidth() {
+    return panel.screen ? panel.screen.width : 1280
+  }
+
+  function screenHeight() {
+    return panel.screen ? panel.screen.height : 1080
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value))
+  }
+
+  function movePanel(dx, dy) {
+    panelRightMargin = clamp(panelRightMargin - dx, 4, Math.max(4, screenWidth() - panel.width - 4))
+    panelTopMargin = clamp(panelTopMargin + dy, 4, Math.max(4, screenHeight() - panel.height - 4))
+  }
+
+  function panelContentHeight() {
+    const resultHeight = actionMessage.length > 0 && !busy ? Math.max(26, actionResult.implicitHeight + 10) + 12 : 0
+    return 32 + 12 + 1 + 12 + 26 + 12 + resultHeight + list.height + 32
+  }
+
+  function reclampPanelMargins() {
+    panelRightMargin = clamp(panelRightMargin, 4, Math.max(4, screenWidth() - panel.width - 4))
+    panelTopMargin = clamp(panelTopMargin, 4, Math.max(4, screenHeight() - panel.height - 4))
+  }
+
+  function disabledReason(vm, role) {
+    if (state.connectivity !== "connected") return state.connectivity === "auth-denied" ? "Authorization denied" : "nixlingd is unreachable"
+    if (role === "admin" && state.role !== "admin") return "Requires admin role"
+    if (state.role === "none") return "Requires launcher role"
+    if (vm && vm.state !== "running") return "VM must be running"
+    return "Unavailable"
+  }
+
+  function confirmAction(key, message, args) {
+    if (confirmKey === key) {
+      confirmKey = ""
+      confirmTimer.stop()
+      action(args)
+    } else {
+      confirmKey = key
+      hoverHint = message
+      confirmTimer.restart()
+    }
   }
 
   Process {
@@ -328,7 +448,7 @@ ShellRoot {
       }
     }
     stderr: StdioCollector {}
-    onExited: root.busy = false
+    onExited: if (!root.actionBusy) root.busy = false
   }
 
   Process {
@@ -350,28 +470,55 @@ ShellRoot {
     id: actionProc
     property string out: ""
     property string err: ""
+    property var args: []
     stdout: StdioCollector {
       onStreamFinished: actionProc.out = this.text.trim()
     }
     stderr: StdioCollector {
       onStreamFinished: actionProc.err = this.text.trim()
     }
-    onExited: {
-      if (actionProc.err.length > 0) {
+    onExited: (exitCode, exitStatus) => {
+      const ok = exitCode === 0 && exitStatus === 0
+      if (!ok) {
         root.actionFailed = true
-        root.actionMessage = actionProc.err
+        root.actionMessage = actionProc.err.length > 0 ? actionProc.err : (actionProc.out.length > 0 ? actionProc.out : "Action failed")
       } else if (actionProc.out.length > 0) {
         root.actionFailed = false
         root.actionMessage = actionProc.out
       } else {
         root.actionFailed = false
-        root.actionMessage = "done"
+        root.actionMessage = root.successMessage(actionProc.args)
       }
       actionProc.out = ""
       actionProc.err = ""
+      actionProc.args = []
+      root.actionBusy = false
+      root.busy = false
+      actionClearTimer.restart()
       root.reload()
     }
   }
+
+  Timer {
+    id: actionClearTimer
+    interval: 2200
+    repeat: false
+    onTriggered: {
+      if (!root.busy) root.actionMessage = ""
+    }
+  }
+
+  Timer {
+    id: confirmTimer
+    interval: 2200
+    repeat: false
+    onTriggered: {
+      root.confirmKey = ""
+      if (root.hoverHint.indexOf("Click again") === 0) root.hoverHint = ""
+    }
+  }
+
+  Component.onCompleted: reloadUsbDevices()
 
   Timer {
     interval: 2500
@@ -387,13 +534,16 @@ ShellRoot {
     focusable: true
     aboveWindows: true
     exclusiveZone: 0
-    width: 420
-    height: 620
+    implicitWidth: 420
+    implicitHeight: Math.min(Math.max(240, root.panelContentHeight()), Math.floor(root.screenHeight() * 0.5))
     color: "transparent"
     surfaceFormat { opaque: false }
 
     anchors { top: true; right: true }
-    margins { top: 8; right: 8 }
+    margins { top: root.panelTopMargin; right: root.panelRightMargin }
+    onWidthChanged: root.reclampPanelMargins()
+    onHeightChanged: root.reclampPanelMargins()
+    onScreenChanged: root.reclampPanelMargins()
 
     Rectangle {
       anchors.fill: parent
@@ -404,20 +554,39 @@ ShellRoot {
       clip: true
 
       Column {
-        anchors.fill: parent
-        anchors.margins: 16
+        id: shellContent
+        x: 16
+        y: 16
+        width: parent.width - 32
+        height: parent.height - 32
         spacing: 12
+        onImplicitHeightChanged: root.reclampPanelMargins()
 
-          Row {
+          Item {
             width: parent.width
             height: 32
-            spacing: 10
+
+            MouseArea {
+              id: dragHandle
+              anchors.fill: parent
+              acceptedButtons: Qt.LeftButton
+              property real lastX: 0
+              property real lastY: 0
+              onPressed: (mouse) => {
+                lastX = mouse.x
+                lastY = mouse.y
+              }
+              onPositionChanged: (mouse) => {
+                if (pressed) root.movePanel(mouse.x - lastX, mouse.y - lastY)
+              }
+            }
 
             Rectangle {
               width: 66
               height: 22
               radius: 999
               color: root.state.connectivity === "connected" ? "#1f3f2c" : "#4a1f2a"
+              anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               Text {
                 anchors.centerIn: parent
@@ -429,23 +598,35 @@ ShellRoot {
             }
 
             Text {
-              width: parent.width - 116
+              anchors.centerIn: parent
+              width: parent.width - 160
               anchors.verticalCenter: parent.verticalCenter
               color: "#cdd6f4"
               font.pixelSize: 16
               font.bold: true
               horizontalAlignment: Text.AlignHCenter
-              text: "nixling VMs"
+              text: "nixling"
             }
 
-            Text {
-              width: 34
+            Row {
+              anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              color: "#89b4fa"
-              font.pixelSize: 18
-              horizontalAlignment: Text.AlignRight
-              text: "↻"
-              MouseArea { anchors.fill: parent; onClicked: root.reload() }
+              spacing: 4
+
+              IconButton {
+                text: "monitoring"
+                tooltip: root.observabilityEnabled ? "Open Signoz observability portal" : "Observability URL is not configured"
+                accent: "#f9e2af"
+                enabled: root.observabilityEnabled && !root.busy
+                onClicked: root.action(["observability"])
+              }
+              IconButton {
+                text: "refresh"
+                tooltip: "Refresh VM status"
+                accent: "#89b4fa"
+                enabled: !root.busy
+                onClicked: root.reload()
+              }
             }
           }
 
@@ -493,12 +674,17 @@ ShellRoot {
             }
           }
 
-          Flickable {
+          Item {
             width: parent.width
-            height: parent.height - 84 - ((root.actionMessage.length > 0 && !root.busy) ? 36 : 0)
+            height: Math.max(96, panel.height - y - 16)
+
+          Flickable {
+            id: vmListFlickable
+            anchors.fill: parent
             contentWidth: width
-            contentHeight: list.height
+            contentHeight: list.implicitHeight
             clip: true
+            boundsBehavior: Flickable.StopAtBounds
 
             Column {
               id: list
@@ -552,11 +738,14 @@ ShellRoot {
                       anchors.verticalCenter: parent.verticalCenter
                       IconButton {
                         text: vm.state === "running" ? "stop" : "play_arrow"
-                        tooltip: (vm.state === "running" ? "Stop " : "Start ") + vm.name
+                        tooltip: enabled ? ((vm.state === "running" ? "Stop " : "Start ") + vm.name) : root.disabledReason(vm, "admin")
                         accent: vm.state === "running" ? "#f38ba8" : "#a6e3a1"
                         enabled: vm.state === "running" ? root.canStop(vm) : root.canStart(vm)
                         prominent: true
-                        onClicked: root.action([vm.state === "running" ? "stop" : "start", vm.name])
+                        onClicked: {
+                          if (vm.state === "running") root.confirmAction("stop:" + vm.name, "Click again to confirm stopping " + vm.name, ["stop", vm.name])
+                          else root.action(["start", vm.name])
+                        }
                       }
                       IconButton {
                         text: expanded ? "expand_less" : "more_horiz"
@@ -594,7 +783,7 @@ ShellRoot {
 
                   Flow {
                     id: usbControls
-                    visible: (vm.usb || []).length > 0
+                    visible: (vm.usb || []).length > 0 || (root.state.connectivity === "connected" && root.state.role !== "none")
                     width: parent.width
                     spacing: 6
                     Repeater {
@@ -602,11 +791,19 @@ ShellRoot {
                       ControlChip {
                         icon: modelData.bound ? "usb_off" : "usb"
                         label: root.usbLabel(modelData)
-                        tooltip: root.usbTooltip(vm, modelData)
+                        tooltip: enabled ? root.usbTooltip(vm, modelData) : (modelData.ownerVm && modelData.ownerVm !== vm.name ? root.usbTooltip(vm, modelData) : root.disabledReason(null, "admin"))
                         accent: "#94e2d5"
                         enabled: root.canUsb(vm, modelData)
                         onClicked: root.attachOrPrompt(vmCard, vm, modelData)
                       }
+                    }
+                    ControlChip {
+                      icon: "add"
+                      label: "USB"
+                      tooltip: enabled ? ("Attach another USB device to " + vm.name) : root.disabledReason(null, "admin")
+                      accent: "#94e2d5"
+                      enabled: root.canAdminMutate()
+                      onClicked: root.attachOrPrompt(vmCard, vm, ({ busId: "pending", bound: false, ownerVm: null }))
                     }
                     Rectangle {
                       visible: vm.pendingRestart
@@ -636,11 +833,12 @@ ShellRoot {
                           label: root.shortDeviceLabel(modelData)
                           tooltip: "Attach " + modelData.label + " to " + vm.name
                           accent: "#94e2d5"
-                          enabled: root.canMutate()
+                          enabled: root.canAdminMutate()
                           onClicked: root.action(["usb-attach", vm.name, modelData.busId])
                         }
                       }
                     }
+
                   }
 
                   Row {
@@ -689,20 +887,32 @@ ShellRoot {
                       label: "attach"
                       tooltip: "Attach entered USB bus id"
                       accent: "#94e2d5"
-                      enabled: usbEntryText.length > 0 && root.canMutate()
+                      enabled: usbEntryText.length > 0 && root.canAdminMutate()
                       onClicked: root.action(["usb-attach", vm.name, usbEntryText])
                     }
                   }
 
-                  Row {
+                  Column {
                     id: details
                     visible: expanded
                     width: parent.width
-                    spacing: 8
-                    ControlChip { icon: "terminal"; label: "terminal"; tooltip: root.state.role === "admin" ? "Open terminal" : "Requires admin role"; accent: "#cba6f7"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
-                    ControlChip { icon: "restart_alt"; label: "restart"; tooltip: "Restart VM"; accent: "#fab387"; enabled: root.canAdvanced(vm); onClicked: root.action(["restart", vm.name]) }
-                    ControlChip { icon: "verified"; label: "verify"; tooltip: "Verify store"; accent: "#f9e2af"; enabled: root.canMutate(); onClicked: root.action(["store-verify", vm.name]) }
-                    ControlChip { icon: "sync_alt"; label: "switch"; tooltip: "Switch VM generation"; accent: "#89b4fa"; enabled: root.canAdvanced(vm); onClicked: root.action(["switch", vm.name]) }
+                    spacing: 6
+
+                    Row {
+                      width: parent.width
+                      spacing: 8
+                      IconButton { text: "terminal"; tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin"); accent: "#cba6f7"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
+                      IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin"); accent: "#fab387"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
+                    }
+
+                    Row {
+                      width: parent.width
+                      spacing: 8
+                      IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(null, "admin"); accent: "#f9e2af"; enabled: root.canAdminMutate(); onClicked: root.action(["store-verify", vm.name]) }
+                      IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(null, "launcher"); accent: "#a6e3a1"; enabled: root.canMutate(); onClicked: root.action(["build", vm.name]) }
+                      IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(null, "admin"); accent: "#fab387"; enabled: root.canAdminMutate(); onClicked: root.action(["boot", vm.name]) }
+                      IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin"); accent: "#89b4fa"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
+                    }
                   }
                 }
 
@@ -713,6 +923,25 @@ ShellRoot {
                 }
               }
             }
+
+              Rectangle {
+                parent: vmListFlickable
+                visible: vmListFlickable.contentHeight > vmListFlickable.height
+                width: 4
+                height: vmListFlickable.height
+                x: vmListFlickable.width - width
+                y: 0
+                radius: 999
+                color: "#1e1e2e"
+
+                Rectangle {
+                  width: parent.width
+                  radius: 999
+                  color: "#6c7086"
+                  height: Math.max(24, parent.height * (vmListFlickable.height / vmListFlickable.contentHeight))
+                  y: (parent.height - height) * (vmListFlickable.contentY / Math.max(1, vmListFlickable.contentHeight - vmListFlickable.height))
+                }
+              }
           }
       }
     }
@@ -727,7 +956,7 @@ ShellRoot {
     signal clicked()
     width: prominent ? 30 : 26
     height: prominent ? 30 : 26
-    radius: prominent ? 10 : 8
+    radius: width / 2
     opacity: enabled ? 1.0 : 0.28
     border.width: 0
     color: prominent
@@ -802,4 +1031,20 @@ ShellRoot {
     }
   }
 }
+}
 "##;
+
+#[cfg(test)]
+mod qml_tests {
+    use super::QML_SOURCE;
+
+    #[test]
+    fn qml_source_smoke_covers_runtime_contract() {
+        assert!(QML_SOURCE.contains("PanelWindow"));
+        assert!(QML_SOURCE.contains("id: vmListFlickable"));
+        assert!(QML_SOURCE.contains("x: vmListFlickable.width - width"));
+        assert!(QML_SOURCE.contains("onExited: (exitCode, exitStatus)"));
+        assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED"));
+        assert!(!QML_SOURCE.contains("import QtQuick.Controls"));
+    }
+}
