@@ -239,6 +239,7 @@ mod tests {
             static_ip: None,
             readiness: vec![],
             usb: vec![],
+            quick_launch: vec![],
         }
     }
 

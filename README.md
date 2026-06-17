@@ -23,8 +23,9 @@ official `nixling` CLI.
   `attention`, `daemon-down`, `auth-denied`) and a per-VM tooltip.
 - **A Quickshell layer-shell control popup** — per-VM cards with lifecycle
   controls, detached terminal launch, USB attach/detach, store
-  verify/build/boot/switch icons, and an observability portal button, all
-  gated on your effective nixling authorization.
+  verify/build/boot/switch icons, config-driven quick-launch icons, and an
+  observability portal button, all gated on your effective nixling
+  authorization.
 - **Safe by construction** — public socket only; no broker socket, no
   `sudo`, no direct state-file mutation, argv-only command execution.
 

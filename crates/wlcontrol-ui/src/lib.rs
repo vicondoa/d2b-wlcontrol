@@ -70,6 +70,10 @@ pub fn open(config: &Config) -> WlResult<()> {
                 "0"
             },
         )
+        .env(
+            "NIXLING_WLCONTROL_OBSERVABILITY_SUCCESS",
+            &config.observability.success_message,
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -221,6 +225,7 @@ ShellRoot {
   property real panelRightMargin: 8
   property string confirmKey: ""
   property bool observabilityEnabled: Quickshell.env("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED") === "1"
+  property string observabilitySuccess: Quickshell.env("NIXLING_WLCONTROL_OBSERVABILITY_SUCCESS") || "Opened observability portal"
 
   function visibleVms() {
     const vms = state.vms || []
@@ -334,6 +339,10 @@ ShellRoot {
     return (u.bound ? "detach " : "attach ") + u.busId
   }
 
+  function visibleUsbClaims(vm) {
+    return (vm.usb || []).filter(u => u.busId !== "pending")
+  }
+
   function usbTooltip(vm, u) {
     const device = usbDevice(u.busId)
     const name = device ? device.label : "USB " + u.busId
@@ -361,6 +370,7 @@ ShellRoot {
     if (verb === "usb-attach") return "Attaching USB to " + vm + "..."
     if (verb === "usb-detach") return "Detaching USB from " + vm + "..."
     if (verb === "terminal") return "Opening terminal in " + vm + "..."
+    if (verb === "quick-launch") return "Launching " + (args[2] || "command") + " in " + vm + "..."
     if (verb === "build") return "Building " + vm + "..."
     if (verb === "boot") return "Staging " + vm + " for next boot..."
     if (verb === "switch") return "Switching " + vm + "..."
@@ -378,11 +388,12 @@ ShellRoot {
     if (verb === "usb-attach") return "USB attached to " + vm
     if (verb === "usb-detach") return "USB detached from " + vm
     if (verb === "terminal") return "Terminal launch requested for " + vm
+    if (verb === "quick-launch") return "Quick launch requested for " + vm
     if (verb === "build") return "Build completed for " + vm
     if (verb === "boot") return "Boot generation staged for " + vm
     if (verb === "switch") return "Switched " + vm
     if (verb === "store-verify") return "Store verified for " + vm
-    if (verb === "observability") return "Opened observability portal"
+    if (verb === "observability") return observabilitySuccess
     if (verb === "restart") return "Restarted " + vm
     if (verb === "start") return "Started " + vm
     if (verb === "stop") return "Stopped " + vm
@@ -781,13 +792,29 @@ ShellRoot {
                     }
                   }
 
+                  Row {
+                    id: quickActions
+                    width: parent.width
+                    spacing: 8
+                    IconButton { text: "terminal"; tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin"); accent: "#cba6f7"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
+                    Repeater {
+                      model: vm.quickLaunch || []
+                      IconButton { text: modelData.icon; tooltip: modelData.tooltip; accent: "#cba6f7"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["quick-launch", vm.name, modelData.id]) }
+                    }
+                    IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin"); accent: "#fab387"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
+                    IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(null, "admin"); accent: "#f9e2af"; enabled: root.canAdminMutate(); onClicked: root.action(["store-verify", vm.name]) }
+                    IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(null, "launcher"); accent: "#a6e3a1"; enabled: root.canMutate(); onClicked: root.action(["build", vm.name]) }
+                    IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(null, "admin"); accent: "#fab387"; enabled: root.canAdminMutate(); onClicked: root.action(["boot", vm.name]) }
+                    IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin"); accent: "#89b4fa"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
+                  }
+
                   Flow {
                     id: usbControls
-                    visible: (vm.usb || []).length > 0 || (root.state.connectivity === "connected" && root.state.role !== "none")
+                    visible: root.visibleUsbClaims(vm).length > 0 || (root.state.connectivity === "connected" && root.state.role !== "none")
                     width: parent.width
                     spacing: 6
                     Repeater {
-                      model: vm.usb || []
+                      model: root.visibleUsbClaims(vm)
                       ControlChip {
                         icon: modelData.bound ? "usb_off" : "usb"
                         label: root.usbLabel(modelData)
@@ -892,28 +919,6 @@ ShellRoot {
                     }
                   }
 
-                  Column {
-                    id: details
-                    visible: expanded
-                    width: parent.width
-                    spacing: 6
-
-                    Row {
-                      width: parent.width
-                      spacing: 8
-                      IconButton { text: "terminal"; tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin"); accent: "#cba6f7"; enabled: root.canAdvanced(vm) && root.state.role === "admin"; onClicked: root.action(["terminal", vm.name]) }
-                      IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin"); accent: "#fab387"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
-                    }
-
-                    Row {
-                      width: parent.width
-                      spacing: 8
-                      IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(null, "admin"); accent: "#f9e2af"; enabled: root.canAdminMutate(); onClicked: root.action(["store-verify", vm.name]) }
-                      IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(null, "launcher"); accent: "#a6e3a1"; enabled: root.canMutate(); onClicked: root.action(["build", vm.name]) }
-                      IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(null, "admin"); accent: "#fab387"; enabled: root.canAdminMutate(); onClicked: root.action(["boot", vm.name]) }
-                      IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin"); accent: "#89b4fa"; enabled: root.canAdvanced(vm); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
-                    }
-                  }
                 }
 
                 MouseArea {
@@ -977,7 +982,7 @@ ShellRoot {
       id: mouse
       anchors.fill: parent
       hoverEnabled: true
-      onContainsMouseChanged: root.hoverHint = containsMouse ? parent.tooltip : ""
+      onContainsMouseChanged: root.hoverHint = containsMouse ? (parent.tooltip.length > 0 ? parent.tooltip : parent.text) : ""
       onClicked: if (parent.enabled) parent.clicked()
       onEntered: parent.scale = 1.05
       onExited: parent.scale = 1.0
@@ -1043,6 +1048,8 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("PanelWindow"));
         assert!(QML_SOURCE.contains("id: vmListFlickable"));
         assert!(QML_SOURCE.contains("x: vmListFlickable.width - width"));
+        assert!(QML_SOURCE.contains("model: vm.quickLaunch || []"));
+        assert!(QML_SOURCE.contains("[\"quick-launch\", vm.name, modelData.id]"));
         assert!(QML_SOURCE.contains("onExited: (exitCode, exitStatus)"));
         assert!(QML_SOURCE.contains("NIXLING_WLCONTROL_OBSERVABILITY_ENABLED"));
         assert!(!QML_SOURCE.contains("import QtQuick.Controls"));

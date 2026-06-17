@@ -89,6 +89,7 @@ pub(crate) fn action_label(action: &ActionKind) -> String {
         ActionKind::UsbDetach { bus_id, .. } => format!("USB detach {bus_id}"),
         ActionKind::StoreVerify { .. } => "Store verify".to_owned(),
         ActionKind::LaunchTerminal { .. } => "Launch terminal".to_owned(),
+        ActionKind::QuickLaunch { id, .. } => format!("Quick launch {id}"),
         ActionKind::AudioMic { .. } => "Mic".to_owned(),
         ActionKind::AudioSpeaker { .. } => "Speaker".to_owned(),
         ActionKind::AudioOff { .. } => "Audio off".to_owned(),
@@ -122,6 +123,7 @@ pub(crate) fn action_vm_name(action: &ActionKind) -> Option<&str> {
         | ActionKind::Switch { vm }
         | ActionKind::Build { vm }
         | ActionKind::Boot { vm }
+        | ActionKind::QuickLaunch { vm, .. }
         | ActionKind::UsbAttach { vm, .. }
         | ActionKind::UsbDetach { vm, .. }
         | ActionKind::StoreVerify { vm }
@@ -220,6 +222,7 @@ mod tests {
             static_ip: None,
             readiness: vec![],
             usb: vec![],
+            quick_launch: vec![],
         }
     }
 
@@ -328,6 +331,13 @@ mod tests {
         assert_eq!(
             action_label(&ActionKind::OpenObservability),
             "Open observability"
+        );
+        assert_eq!(
+            action_label(&ActionKind::QuickLaunch {
+                vm: "work-ssd".to_owned(),
+                id: "run-openterface".to_owned()
+            }),
+            "Quick launch run-openterface"
         );
     }
 

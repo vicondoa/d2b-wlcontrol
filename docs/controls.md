@@ -27,6 +27,7 @@ silently.
 | USB attach | on | admin | `usb attach --apply` | Only when unbound/ownerless for this VM. |
 | USB detach | on | admin | `usb detach --apply` | Only for the owning VM. |
 | Launch terminal | on | admin | `nixling vm exec -d <vm> -- <guest argv...>` | Admin-only detached guest exec; argv-only. |
+| Custom quick launch | icon row | admin | `nixling vm exec -d <vm> -- <configured argv...>` | Per-VM config-driven icons such as `run-openterface`. |
 | Observability portal | header | none | browser argv + Signoz URL | Opens the URL only; auto-login is not performed. |
 | Audio mic / speaker / off | hidden | — | `nixling audio …` | Not rendered until nixling's audio plane is live. |
 | Host install/destroy/migrate/keys | hidden | — | nixling CLI | Out of scope for a control surface. |
@@ -48,7 +49,7 @@ working audio surface, these controls can light up with no privileged-state
 shortcuts.
 
 The control center renders this matrix with auth-aware gating: blocked
-actions are disabled with a tooltip explaining why, system actions are
+actions are disabled with a tooltip explaining why, VM quick actions are
 icon-only circular controls with hover text, and destructive actions
 (stop/restart/switch on a running VM) prompt for confirmation. Action progress
 and results are shown as human-readable messages rather than raw command lines.
