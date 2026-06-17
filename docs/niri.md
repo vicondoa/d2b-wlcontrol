@@ -8,11 +8,14 @@ natively. It makes **no XWayland assumptions** and uses:
 
 ## Popup behavior
 
-`nixling-wlcontrol open` toggles a fixed top-right Quickshell popup:
+`nixling-wlcontrol open` toggles a draggable top-right Quickshell popup:
 
 - first invocation shows it;
 - the next invocation hides it;
-- the popup is a layer-shell surface, not a normal tiled window; and
+- the popup is a layer-shell surface, not a normal tiled window;
+- drag the header/background to reposition it after opening;
+- the popup fits its VM cards until it reaches about half the screen height,
+  then uses a thin scrollbar for overflow; and
 - no niri `window-rule` is required.
 
 This matches Waybar click ergonomics: bind left-click to

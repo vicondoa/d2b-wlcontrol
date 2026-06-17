@@ -36,8 +36,9 @@ surface:
 - the nixlingd public socket `/run/nixling/public.sock` (non-abstract
   `SOCK_SEQPACKET`, 4-byte little-endian length-prefixed JSON frames,
   `SO_PEERCRED` auth); and
-- where a CLI boundary is genuinely better UX (interactive terminal
-  exec), the official `nixling` CLI.
+- where a CLI boundary is genuinely better UX (detached guest terminal exec or
+  non-shell build), the official `nixling` CLI; and
+- for observability, the configured browser opener.
 
 It MUST NEVER:
 
@@ -225,9 +226,9 @@ skip the gate unless the doc describes load-bearing behavior.
   no `interval` on the self-looping module; stable CSS classes only.
 - **Quickshell popup.** Fixed-size layer-shell surface; no XWayland
   assumptions; `open` toggles show/hide from Waybar.
-- **Audio.** Render mic/speaker controls disabled with a clear reason
-  until nixling's `audio` CLI/socket surface returns success — do not
-  mutate audio state files directly.
+- **Audio.** Keep mic/speaker controls hidden or disabled until nixling's
+  `audio` CLI/socket surface returns success — do not mutate audio state files
+  directly.
 
 ## Versioning & changelog
 

@@ -29,12 +29,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
   (env, state, pending-restart, USB ownership), signal-driven refresh
   (`SIGRTMIN+8`), non-overlapping refresh, daemon-down backoff, and
   persisted display mode.
-- **Quickshell control popup.** Fixed top-right layer-shell popup with
+- **Quickshell control popup.** Top-right layer-shell popup with
   per-env VM cards, one-click show/hide behavior, Material-style action
   icons, first-class USB attach/detach chips, and auth-gated controls
   for start/stop/restart, terminal launch, switch, and store verify.
-  Audio controls remain hidden/disabled until nixling exposes a
-  daemon-native audio control plane.
+  Audio controls remain hidden until nixling exposes a daemon-native audio
+  control plane.
+- **Control popup refinements.** The popup now uses a centered `nixling`
+  heading, can be dragged after opening, fits its VM list up to a half-screen
+  cap with a thin scrollbar, sorts `sys-*` VMs to the bottom, shows
+  human-readable action feedback, exposes verify/build/boot/switch as
+  icon-only system controls, launches guest terminals via detached exec, and
+  adds a Signoz observability URL button without auto-login handling.
 - **Safety model.** Public socket only (never the broker socket), no
   `sudo`, no nixling state-file mutation, argv-only command execution,
   and authorization derived from `nixling auth status`.

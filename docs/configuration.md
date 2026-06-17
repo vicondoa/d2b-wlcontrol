@@ -23,10 +23,16 @@ hide_net_vms = true
 show_pending_restart = true
 
 [terminal]
-# Terminal command as an ARGV VECTOR (never a shell string). The VM's
-# `nixling vm exec -it <vm> -- <guest_shell>` invocation is appended.
-argv = ["foot", "--"]
-guest_shell = "bash"
+# Guest terminal command as an ARGV VECTOR (never a shell string). wlcontrol
+# runs `nixling vm exec -d <vm> -- ${guest_argv...}`.
+guest_argv = ["/run/current-system/sw/bin/foot"]
+
+[observability]
+# Signoz URL to open. Auto-login is intentionally deferred; the browser's
+# existing session is used if one exists.
+enabled = true
+url = "http://127.0.0.1:3301"
+browser_argv = ["xdg-open"]
 ```
 
 ## Options
@@ -40,26 +46,36 @@ guest_shell = "bash"
 | `show_pending_restart` | bool | `true` | Surface the pending-restart marker. |
 | `favorites` | array of string | `[]` | VM names pinned first, in the given order. |
 | `hidden_vms` | array of string | `[]` | VM names hidden from compact surfaces. |
-| `terminal.argv` | array of string | `["foot", "--"]` | Terminal argv prefix. |
-| `terminal.guest_shell` | string | `bash` | Guest shell launched inside the VM. |
+| `terminal.guest_argv` | array of string | `["/run/current-system/sw/bin/foot"]` | Guest terminal argv launched detached inside the VM. |
+| `terminal.guest_shell` | string | `bash` | Legacy fallback used only if `terminal.guest_argv = []`. |
+| `observability.enabled` | bool | `true` | Whether to show/use the observability portal action. |
+| `observability.url` | string | `http://127.0.0.1:3301` | Signoz portal URL opened by the header button. |
+| `observability.browser_argv` | array of string | `["xdg-open"]` | Browser/open command prefix for `observability.url`. |
 
 ## Terminal command is argv, not a shell string
 
 The terminal command is always an **argv vector**. `nixling-wlcontrol`
-spawns `terminal.argv` directly (via `execvp`-style process spawning)
-and appends `nixling vm exec -it <vm> -- <guest_shell>` as discrete
-arguments. There is no shell, so VM names and shell paths can never be
-interpreted as shell metacharacters.
+spawns the official `nixling` CLI directly (via `execvp`-style process
+spawning) as `nixling vm exec -d <vm> -- ${terminal.guest_argv...}`. There is no
+shell, so VM names and guest argv elements can never be interpreted as shell
+metacharacters. Use absolute guest paths where possible because guest-control
+exec does not resolve a host shell for you.
 
-Common terminals:
+Common guest terminal commands:
 
 ```toml
-argv = ["foot", "--"]              # foot
-argv = ["wezterm", "start", "--"]  # wezterm
-argv = ["kitty", "--"]             # kitty
-argv = ["alacritty", "-e"]         # alacritty
+guest_argv = ["/run/current-system/sw/bin/foot"]
+guest_argv = ["/run/current-system/sw/bin/ghostty"]
 ```
 
-An empty `terminal.argv` is rejected at config load, and a `public_socket`
-pointing at the privileged broker socket (`priv.sock`) is refused — the
-control surface speaks only the public socket.
+An empty terminal command is rejected at config load, and a `public_socket`
+pointing at the privileged broker socket (`priv.sock`) is refused — the control
+surface speaks only the public socket.
+
+## Observability opens a URL only
+
+The observability button opens `observability.url` with
+`observability.browser_argv`. Set `observability.enabled = false` to disable the
+button/action. It does not read Signoz credentials, generate cookies, or perform
+auto-login; if your browser is already logged in, that session is reused by the
+browser.

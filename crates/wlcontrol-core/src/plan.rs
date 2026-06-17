@@ -22,9 +22,10 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
 
     // Display-only actions are always available.
     match action {
-        ActionKind::OpenControlCenter | ActionKind::CycleDisplay | ActionKind::Refresh => {
-            return None;
-        }
+        ActionKind::OpenControlCenter
+        | ActionKind::OpenObservability
+        | ActionKind::CycleDisplay
+        | ActionKind::Refresh => return None,
         _ => {}
     }
 
@@ -57,7 +58,7 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
             }),
         ActionKind::UsbAttach { vm, bus_id } => usb_attach_block(state, vm, bus_id),
         ActionKind::UsbDetach { vm, bus_id } => usb_detach_block(state, vm, bus_id),
-        ActionKind::StoreVerify { .. } => None,
+        ActionKind::StoreVerify { .. } | ActionKind::Build { .. } | ActionKind::Boot { .. } => None,
         _ => None,
     }
 }
@@ -68,9 +69,11 @@ pub fn vm_actions(state: &WlState, config: &Config, vm: &str) -> Vec<ActionAvail
         ActionKind::Start { vm: vm.into() },
         ActionKind::Stop { vm: vm.into() },
         ActionKind::Restart { vm: vm.into() },
-        ActionKind::Switch { vm: vm.into() },
         ActionKind::LaunchTerminal { vm: vm.into() },
         ActionKind::StoreVerify { vm: vm.into() },
+        ActionKind::Build { vm: vm.into() },
+        ActionKind::Boot { vm: vm.into() },
+        ActionKind::Switch { vm: vm.into() },
     ];
 
     if let Some(target) = running_vm(state, vm) {
@@ -122,6 +125,8 @@ pub fn plan(
         ActionKind::Stop { vm } => socket(SocketIntent::VmStop { vm: vm.clone() }),
         ActionKind::Restart { vm } => socket(SocketIntent::VmRestart { vm: vm.clone() }),
         ActionKind::Switch { vm } => socket(SocketIntent::Switch { vm: vm.clone() }),
+        ActionKind::Build { vm } => build_argv(vm),
+        ActionKind::Boot { vm } => socket(SocketIntent::Boot { vm: vm.clone() }),
         ActionKind::UsbAttach { vm, bus_id } => socket(SocketIntent::UsbAttach {
             vm: vm.clone(),
             bus_id: bus_id.clone(),
@@ -133,6 +138,7 @@ pub fn plan(
         ActionKind::StoreVerify { vm } => socket(SocketIntent::StoreVerify { vm: vm.clone() }),
         ActionKind::Refresh => socket(SocketIntent::List),
         ActionKind::LaunchTerminal { vm } => terminal_argv(vm, config),
+        ActionKind::OpenObservability => observability_argv(config)?,
         ActionKind::AudioMic { .. }
         | ActionKind::AudioSpeaker { .. }
         | ActionKind::AudioOff { .. } => return Err(Unavailable::NotYetImplemented),
@@ -161,19 +167,38 @@ fn config_block_reason(action: &ActionKind, config: &Config) -> Option<Unavailab
             detail: err.to_string(),
         });
     }
+    if matches!(action, ActionKind::OpenObservability) {
+        if let Err(err) = config.validate() {
+            return Some(Unavailable::Blocked {
+                detail: err.to_string(),
+            });
+        }
+        if !config.observability.enabled {
+            return Some(Unavailable::Blocked {
+                detail: "observability is disabled".into(),
+            });
+        }
+        if config.observability.url.is_none() {
+            return Some(Unavailable::Blocked {
+                detail: "observability.url is not configured".into(),
+            });
+        }
+    }
     None
 }
 
 fn required_role(action: &ActionKind) -> AuthRole {
     match action {
-        ActionKind::LaunchTerminal { .. } => AuthRole::Admin,
-        ActionKind::Start { .. }
+        ActionKind::LaunchTerminal { .. }
+        | ActionKind::Start { .. }
         | ActionKind::Stop { .. }
         | ActionKind::Restart { .. }
         | ActionKind::Switch { .. }
+        | ActionKind::Boot { .. }
         | ActionKind::UsbAttach { .. }
         | ActionKind::UsbDetach { .. }
-        | ActionKind::StoreVerify { .. } => AuthRole::Launcher,
+        | ActionKind::StoreVerify { .. } => AuthRole::Admin,
+        ActionKind::Build { .. } => AuthRole::Launcher,
         _ => AuthRole::None,
     }
 }
@@ -235,21 +260,52 @@ fn socket(intent: SocketIntent) -> PlannedAction {
     PlannedAction::Socket { intent }
 }
 
-/// Build the argv-only terminal launch command. There is no shell string and no
-/// interpolation: the terminal argv prefix, the nixling exec invocation, and the
-/// guest shell are concatenated as discrete argv elements.
+/// Build the argv-only detached terminal launch command. There is no shell
+/// string and no interpolation: the nixling exec invocation and guest terminal
+/// command are concatenated as discrete argv elements.
 fn terminal_argv(vm: &str, config: &Config) -> PlannedAction {
-    let mut argv = config.terminal.argv.clone();
-    argv.extend([
+    let mut argv = vec![
         "nixling".to_owned(),
         "vm".to_owned(),
         "exec".to_owned(),
-        "-it".to_owned(),
+        "-d".to_owned(),
         vm.to_owned(),
         "--".to_owned(),
-        config.terminal.guest_shell.clone(),
-    ]);
-    PlannedAction::Process { argv }
+    ];
+    if config.terminal.guest_argv.is_empty() {
+        argv.push(config.terminal.guest_shell.clone());
+    } else {
+        argv.extend(config.terminal.guest_argv.clone());
+    }
+    PlannedAction::Process { argv, wait: true }
+}
+
+fn build_argv(vm: &str) -> PlannedAction {
+    PlannedAction::Process {
+        argv: vec!["nixling".to_owned(), "build".to_owned(), vm.to_owned()],
+        wait: true,
+    }
+}
+
+fn observability_argv(config: &Config) -> Result<PlannedAction, Unavailable> {
+    if !config.observability.enabled {
+        return Err(Unavailable::Blocked {
+            detail: "observability is disabled".into(),
+        });
+    }
+    let Some(url) = &config.observability.url else {
+        return Err(Unavailable::Blocked {
+            detail: "observability.url is not configured".into(),
+        });
+    };
+    let mut argv = config.observability.browser_argv.clone();
+    if argv.is_empty() {
+        return Err(Unavailable::Blocked {
+            detail: "observability.browser_argv must contain at least one argv element".into(),
+        });
+    }
+    argv.push(url.clone());
+    Ok(PlannedAction::Process { argv, wait: false })
 }
 
 #[cfg(test)]
@@ -329,7 +385,7 @@ mod tests {
         assert!(matches!(
             plan(&lifecycle, &no_role, &Config::default()),
             Err(Unavailable::InsufficientRole {
-                required: AuthRole::Launcher
+                required: AuthRole::Admin
             })
         ));
 
@@ -337,7 +393,16 @@ mod tests {
             AuthRole::Launcher,
             vec![vm("corp-vm", RuntimeState::Stopped)],
         );
-        assert!(plan(&lifecycle, &launcher, &Config::default()).is_ok());
+        assert!(matches!(
+            plan(&lifecycle, &launcher, &Config::default()),
+            Err(Unavailable::InsufficientRole {
+                required: AuthRole::Admin
+            })
+        ));
+        let build = ActionKind::Build {
+            vm: "corp-vm".into(),
+        };
+        assert!(plan(&build, &launcher, &Config::default()).is_ok());
 
         let running_launcher = connected_state(
             AuthRole::Launcher,
@@ -370,9 +435,12 @@ mod tests {
         )
         .expect("plannable");
         match planned {
-            PlannedAction::Process { argv } => {
-                assert_eq!(argv[0], "foot");
+            PlannedAction::Process { argv, wait } => {
+                assert!(wait);
+                assert_eq!(argv[0], "nixling");
                 assert!(argv.contains(&"corp-vm".to_owned()));
+                assert!(argv.contains(&"-d".to_owned()));
+                assert!(!argv.contains(&"-it".to_owned()));
                 assert!(argv.iter().all(|a| !a.contains("&&") && !a.contains("|")));
             }
             other => panic!("expected process, got {other:?}"),
@@ -381,10 +449,7 @@ mod tests {
 
     #[test]
     fn start_blocked_when_already_running() {
-        let state = connected_state(
-            AuthRole::Launcher,
-            vec![vm("corp-vm", RuntimeState::Running)],
-        );
+        let state = connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Running)]);
         let reason = block_reason(
             &ActionKind::Start {
                 vm: "corp-vm".into(),
@@ -396,10 +461,8 @@ mod tests {
 
     #[test]
     fn running_state_gates_stop_restart_switch_and_terminal() {
-        let stopped_launcher = connected_state(
-            AuthRole::Launcher,
-            vec![vm("corp-vm", RuntimeState::Stopped)],
-        );
+        let stopped_admin =
+            connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Stopped)]);
         for action in [
             ActionKind::Stop {
                 vm: "corp-vm".into(),
@@ -412,13 +475,11 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                plan(&action, &stopped_launcher, &Config::default()),
+                plan(&action, &stopped_admin, &Config::default()),
                 Err(Unavailable::VmState { .. })
             ));
         }
 
-        let stopped_admin =
-            connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Stopped)]);
         let terminal = ActionKind::LaunchTerminal {
             vm: "corp-vm".into(),
         };
@@ -442,12 +503,30 @@ mod tests {
                 vm: "corp-vm".into(),
             },
         ] {
-            assert!(plan(&action, &running_launcher, &Config::default()).is_ok());
+            assert!(matches!(
+                plan(&action, &running_launcher, &Config::default()),
+                Err(Unavailable::InsufficientRole {
+                    required: AuthRole::Admin
+                })
+            ));
         }
 
         let running_admin =
             connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Running)]);
         assert!(plan(&terminal, &running_admin, &Config::default()).is_ok());
+        for action in [
+            ActionKind::Stop {
+                vm: "corp-vm".into(),
+            },
+            ActionKind::Restart {
+                vm: "corp-vm".into(),
+            },
+            ActionKind::Switch {
+                vm: "corp-vm".into(),
+            },
+        ] {
+            assert!(plan(&action, &running_admin, &Config::default()).is_ok());
+        }
     }
 
     #[test]
@@ -457,7 +536,7 @@ mod tests {
             .usb
             .push(usb_claim("dev-vm", "1-2", true, Some("dev-vm")));
         let state = connected_state(
-            AuthRole::Launcher,
+            AuthRole::Admin,
             vec![vm("corp-vm", RuntimeState::Running), owner],
         );
 
@@ -530,26 +609,29 @@ mod tests {
 
         let actions = vm_actions(&state, &Config::default(), "corp-vm");
 
-        assert_eq!(actions.len(), 11);
+        assert_eq!(actions.len(), 13);
         assert!(matches!(&actions[0].action, ActionKind::Start { .. }));
-        assert!(matches!(&actions[6].action, ActionKind::UsbAttach { .. }));
-        assert!(matches!(&actions[7].action, ActionKind::UsbDetach { .. }));
-        assert!(matches!(&actions[8].action, ActionKind::AudioMic { .. }));
+        assert!(matches!(&actions[5].action, ActionKind::Build { .. }));
+        assert!(matches!(&actions[6].action, ActionKind::Boot { .. }));
+        assert!(matches!(&actions[7].action, ActionKind::Switch { .. }));
+        assert!(matches!(&actions[8].action, ActionKind::UsbAttach { .. }));
+        assert!(matches!(&actions[9].action, ActionKind::UsbDetach { .. }));
+        assert!(matches!(&actions[10].action, ActionKind::AudioMic { .. }));
         assert!(matches!(
-            actions[8].unavailable.as_ref(),
+            actions[10].unavailable.as_ref(),
             Some(Unavailable::NotYetImplemented)
         ));
         assert!(matches!(
-            &actions[9].action,
+            &actions[11].action,
             ActionKind::AudioSpeaker { .. }
         ));
         assert!(matches!(
-            actions[9].unavailable.as_ref(),
+            actions[11].unavailable.as_ref(),
             Some(Unavailable::NotYetImplemented)
         ));
-        assert!(matches!(&actions[10].action, ActionKind::AudioOff { .. }));
+        assert!(matches!(&actions[12].action, ActionKind::AudioOff { .. }));
         assert!(matches!(
-            actions[10].unavailable.as_ref(),
+            actions[12].unavailable.as_ref(),
             Some(Unavailable::NotYetImplemented)
         ));
     }
@@ -559,7 +641,8 @@ mod tests {
         let state = connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Running)]);
         let config = Config {
             terminal: crate::config::TerminalConfig {
-                argv: vec![],
+                guest_shell: String::new(),
+                guest_argv: vec![],
                 ..Default::default()
             },
             ..Default::default()
@@ -573,7 +656,80 @@ mod tests {
             .expect("terminal action");
         assert!(matches!(
             &terminal.unavailable,
-            Some(Unavailable::Blocked { detail }) if detail.contains("terminal.argv")
+            Some(Unavailable::Blocked { detail }) if detail.contains("terminal.guest_argv")
         ));
+    }
+
+    #[test]
+    fn build_and_boot_plan_to_process_and_socket() {
+        let state = connected_state(AuthRole::Admin, vec![vm("corp-vm", RuntimeState::Running)]);
+
+        let build = plan(
+            &ActionKind::Build {
+                vm: "corp-vm".into(),
+            },
+            &connected_state(
+                AuthRole::Launcher,
+                vec![vm("corp-vm", RuntimeState::Running)],
+            ),
+            &Config::default(),
+        )
+        .expect("build plannable");
+        assert_eq!(
+            build,
+            PlannedAction::Process {
+                argv: vec!["nixling".into(), "build".into(), "corp-vm".into()],
+                wait: true,
+            }
+        );
+
+        let boot = plan(
+            &ActionKind::Boot {
+                vm: "corp-vm".into(),
+            },
+            &state,
+            &Config::default(),
+        )
+        .expect("boot plannable");
+        assert_eq!(
+            boot,
+            PlannedAction::Socket {
+                intent: SocketIntent::Boot {
+                    vm: "corp-vm".into()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn process_actions_deserialize_without_wait_for_compatibility() {
+        let action: PlannedAction =
+            serde_json::from_str(r#"{"dispatch":"process","argv":["nixling","build","corp-vm"]}"#)
+                .expect("old process action should deserialize");
+        assert_eq!(
+            action,
+            PlannedAction::Process {
+                argv: vec!["nixling".into(), "build".into(), "corp-vm".into()],
+                wait: false,
+            }
+        );
+    }
+
+    #[test]
+    fn observability_plan_opens_configured_url_without_daemon_state() {
+        let planned = plan(
+            &ActionKind::OpenObservability,
+            &WlState::default(),
+            &Config::default(),
+        )
+        .expect("observability plannable");
+
+        assert_eq!(
+            planned,
+            PlannedAction::Process {
+                argv: vec!["xdg-open".into(), "http://127.0.0.1:3301".into()],
+                wait: false,
+            }
+        );
     }
 }

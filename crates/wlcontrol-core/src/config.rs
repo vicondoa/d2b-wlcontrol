@@ -52,17 +52,35 @@ pub struct Config {
     pub hidden_vms: Vec<String>,
     /// Terminal launch configuration.
     pub terminal: TerminalConfig,
+    /// Observability portal launch configuration.
+    pub observability: ObservabilityConfig,
 }
 
-/// Terminal launch configuration. The terminal command is always an argv
-/// vector; no shell string interpolation is performed.
+/// Terminal launch configuration. The guest command is always an argv vector;
+/// no shell string interpolation is performed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
 pub struct TerminalConfig {
-    /// argv prefix used to spawn a terminal, e.g. `["foot", "--"]`.
+    /// Deprecated host-terminal argv prefix kept for config compatibility.
     pub argv: Vec<String>,
-    /// Guest shell to run inside the VM, e.g. `bash`.
+    /// Deprecated single guest command kept for config compatibility.
     pub guest_shell: String,
+    /// Guest argv launched detached inside the VM.
+    pub guest_argv: Vec<String>,
+}
+
+/// Observability portal configuration. Opening the browser is argv-only and
+/// does not read credentials or mint login tokens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub struct ObservabilityConfig {
+    /// Whether to expose the observability portal action.
+    pub enabled: bool,
+    /// URL to open for the Signoz observability portal. `None` disables the
+    /// header button until the operator configures a URL.
+    pub url: Option<String>,
+    /// argv prefix used to open the URL, e.g. `["xdg-open"]`.
+    pub browser_argv: Vec<String>,
 }
 
 impl Default for Config {
@@ -76,6 +94,7 @@ impl Default for Config {
             favorites: Vec::new(),
             hidden_vms: Vec::new(),
             terminal: TerminalConfig::default(),
+            observability: ObservabilityConfig::default(),
         }
     }
 }
@@ -85,6 +104,17 @@ impl Default for TerminalConfig {
         Self {
             argv: vec!["foot".to_owned(), "--".to_owned()],
             guest_shell: "bash".to_owned(),
+            guest_argv: vec!["/run/current-system/sw/bin/foot".to_owned()],
+        }
+    }
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            url: Some("http://127.0.0.1:3301".to_owned()),
+            browser_argv: vec!["xdg-open".to_owned()],
         }
     }
 }
@@ -105,9 +135,17 @@ impl Config {
         if !is_public_socket_path(&self.public_socket) {
             return Err(WlError::Config(PRIVILEGED_BROKER_SOCKET_MESSAGE.into()));
         }
-        if self.terminal.argv.is_empty() {
+        if self.terminal.guest_argv.is_empty() && self.terminal.guest_shell.trim().is_empty() {
             return Err(WlError::Config(
-                "terminal.argv must contain at least one argv element".into(),
+                "terminal.guest_argv must contain at least one argv element".into(),
+            ));
+        }
+        if self.observability.enabled
+            && self.observability.url.is_some()
+            && self.observability.browser_argv.is_empty()
+        {
+            return Err(WlError::Config(
+                "observability.browser_argv must contain at least one argv element".into(),
             ));
         }
         Ok(())
@@ -148,6 +186,13 @@ mod tests {
         assert!(c.favorites.is_empty());
         assert!(c.hidden_vms.is_empty());
         assert_eq!(c.terminal.guest_shell, "bash");
+        assert_eq!(c.terminal.guest_argv, ["/run/current-system/sw/bin/foot"]);
+        assert!(c.observability.enabled);
+        assert_eq!(
+            c.observability.url.as_deref(),
+            Some("http://127.0.0.1:3301")
+        );
+        assert_eq!(c.observability.browser_argv, ["xdg-open"]);
     }
 
     #[test]
@@ -170,15 +215,66 @@ hidden_vms = ["noisy-vm"]
     }
 
     #[test]
-    fn empty_terminal_argv_is_rejected() {
+    fn empty_terminal_guest_command_is_rejected() {
         let err = Config::from_toml(
             r#"
 [terminal]
-argv = []
+guest_shell = ""
+guest_argv = []
 "#,
         )
-        .expect_err("empty argv should fail validation");
-        assert!(matches!(err, WlError::Config(msg) if msg.contains("terminal.argv")));
+        .expect_err("empty guest argv should fail validation");
+        assert!(matches!(err, WlError::Config(msg) if msg.contains("terminal.guest_argv")));
+    }
+
+    #[test]
+    fn parses_terminal_guest_argv_and_observability() {
+        let c = Config::from_toml(
+            r#"
+[terminal]
+guest_argv = ["/run/current-system/sw/bin/ghostty"]
+
+[observability]
+enabled = true
+url = "http://signoz.example"
+browser_argv = ["xdg-open"]
+"#,
+        )
+        .expect("parse config");
+        assert_eq!(
+            c.terminal.guest_argv,
+            ["/run/current-system/sw/bin/ghostty"]
+        );
+        assert_eq!(
+            c.observability.url.as_deref(),
+            Some("http://signoz.example")
+        );
+    }
+
+    #[test]
+    fn disabled_observability_allows_empty_browser_argv() {
+        let c = Config::from_toml(
+            r#"
+[observability]
+enabled = false
+browser_argv = []
+"#,
+        )
+        .expect("disabled observability should not require a browser");
+        assert!(!c.observability.enabled);
+    }
+
+    #[test]
+    fn observability_browser_argv_is_required_when_url_is_set() {
+        let err = Config::from_toml(
+            r#"
+[observability]
+url = "http://signoz.example"
+browser_argv = []
+"#,
+        )
+        .expect_err("empty browser argv should fail validation");
+        assert!(matches!(err, WlError::Config(msg) if msg.contains("observability.browser_argv")));
     }
 
     #[test]

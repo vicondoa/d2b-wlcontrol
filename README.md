@@ -6,15 +6,15 @@ niri / Wayland desktop.
 
 `nixling-wlcontrol` shows which nixling VMs are running and surfaces the
 controls a nixling operator can already drive — start / stop / restart,
-launch a terminal into a VM, attach / detach USB, and verify a VM's
-store — without ever touching anything privileged. It talks only to the
+detached terminal launch, attach / detach USB, verify / build / boot /
+switch, and observability portal open — without ever touching anything privileged. It talks only to the
 nixlingd **public** socket and, where it is the better boundary, the
 official `nixling` CLI.
 
 > Status: the Waybar indicator, the live nixlingd public-socket client,
 > the reduced status model, auth-gated action planning, and the Quickshell
-> layer-shell popup are all in place. Audio mic/speaker controls are present
-> but disabled pending a daemon-native nixling audio control plane.
+> layer-shell popup are all in place. Audio mic/speaker controls remain out of
+> the popup pending a daemon-native nixling audio control plane.
 
 ## What it does
 
@@ -22,14 +22,15 @@ official `nixling` CLI.
   with state-driven CSS classes (`all-running`, `partial-running`,
   `attention`, `daemon-down`, `auth-denied`) and a per-VM tooltip.
 - **A Quickshell layer-shell control popup** — per-VM cards with lifecycle
-  controls, terminal launch, USB attach/detach, and store verify, all
+  controls, detached terminal launch, USB attach/detach, store
+  verify/build/boot/switch icons, and an observability portal button, all
   gated on your effective nixling authorization.
 - **Safe by construction** — public socket only; no broker socket, no
   `sudo`, no direct state-file mutation, argv-only command execution.
 
-Audio (mic / speaker) controls are designed but **disabled** until
-nixling exposes a daemon-native audio control plane — today those
-nixling verbs return `not-yet-implemented`.
+Audio (mic / speaker) controls are intentionally not rendered until nixling
+exposes a daemon-native audio control plane — today those nixling verbs return
+`not-yet-implemented`.
 
 ## Install
 
@@ -71,14 +72,15 @@ refreshes. See [docs/waybar.md](./docs/waybar.md).
 ## niri setup
 
 No niri window rule is required: `nixling-wlcontrol open` uses
-Quickshell's layer-shell surface as a fixed top-right popup. See
+Quickshell's layer-shell surface as a draggable top-right popup. See
 [docs/niri.md](./docs/niri.md).
 
 ## Configuration
 
 Configuration is TOML at
 `${XDG_CONFIG_HOME:-~/.config}/nixling-wlcontrol/config.toml`. All
-defaults are sane; the most common override is your terminal command.
+defaults are sane; common overrides are the detached guest terminal command and
+observability URL.
 See [docs/configuration.md](./docs/configuration.md).
 
 ## Documentation

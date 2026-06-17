@@ -26,7 +26,8 @@ pub enum AuthRole {
     /// No recognized role; the public socket is unreachable or denied.
     #[default]
     None,
-    /// Lifecycle launcher: may start/stop/restart and drive USB.
+    /// Recognized launcher. Current nixlingd keeps destructive lifecycle/USB
+    /// verbs admin-only; wlcontrol uses this role for non-destructive build.
     Launcher,
     /// Full admin: launcher plus guest-control exec.
     Admin,
@@ -181,7 +182,7 @@ impl WlState {
 }
 
 /// The set of operations the control surface can request. Each maps to a
-/// nixling public-socket request or, for terminal launch, a host process.
+/// nixling public-socket request or an argv-only host process.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum ActionKind {
@@ -195,13 +196,17 @@ pub enum ActionKind {
     Restart { vm: String },
     /// Activate the VM's current closure (`switch --apply`).
     Switch { vm: String },
+    /// Build/evaluate the per-VM toplevel without activation.
+    Build { vm: String },
+    /// Stage the current per-VM closure for next boot (`boot --apply`).
+    Boot { vm: String },
     /// Bind a USB busid to a VM (`usb attach --apply`).
     UsbAttach { vm: String, bus_id: String },
     /// Unbind a USB busid from a VM (`usb detach --apply`).
     UsbDetach { vm: String, bus_id: String },
     /// Verify the per-VM store live pool.
     StoreVerify { vm: String },
-    /// Launch a host terminal running an interactive guest shell.
+    /// Launch a guest terminal with detached guest-control exec.
     LaunchTerminal { vm: String },
     /// Toggle microphone forwarding for a VM (disabled until nixling supports it).
     AudioMic { vm: String, on: bool },
@@ -209,8 +214,10 @@ pub enum ActionKind {
     AudioSpeaker { vm: String, on: bool },
     /// Disable all audio forwarding for a VM (disabled until nixling supports it).
     AudioOff { vm: String },
-    /// Open / focus the GTK control center.
+    /// Open / focus the Quickshell control center.
     OpenControlCenter,
+    /// Open the configured observability portal in a browser.
+    OpenObservability,
     /// Cycle the Waybar compact/detail display mode.
     CycleDisplay,
 }
@@ -267,14 +274,20 @@ impl ActionAvailability {
 ///
 /// The planner emits exactly one of these. A [`PlannedAction::Process`] is an
 /// **argv vector**, never a shell string — there is no shell interpolation
-/// anywhere in the control surface.
+/// anywhere in the control surface. `wait` tells the CLI whether to wait for
+/// short-lived commands (build, detached exec creation) or just launch and
+/// return (browser open).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "dispatch")]
 pub enum PlannedAction {
     /// A nixling public-socket intent the protocol client should execute.
     Socket { intent: SocketIntent },
-    /// A host process to spawn, expressed as an argv vector.
-    Process { argv: Vec<String> },
+    /// A host process, expressed as an argv vector.
+    Process {
+        argv: Vec<String>,
+        #[serde(default)]
+        wait: bool,
+    },
 }
 
 /// A typed nixling public-socket intent. The protocol client maps each variant
@@ -290,6 +303,7 @@ pub enum SocketIntent {
     VmStop { vm: String },
     VmRestart { vm: String },
     Switch { vm: String },
+    Boot { vm: String },
     UsbAttach { vm: String, bus_id: String },
     UsbDetach { vm: String, bus_id: String },
     StoreVerify { vm: String },
@@ -412,6 +426,12 @@ mod tests {
     #[test]
     fn audio_action_variants_round_trip_through_json() {
         let actions = [
+            ActionKind::Build {
+                vm: "corp-vm".into(),
+            },
+            ActionKind::Boot {
+                vm: "corp-vm".into(),
+            },
             ActionKind::AudioMic {
                 vm: "corp-vm".into(),
                 on: true,
@@ -430,5 +450,9 @@ mod tests {
             let back: ActionKind = serde_json::from_str(&json).expect("deserialize action");
             assert_eq!(action, back);
         }
+
+        let json = serde_json::to_string(&ActionKind::OpenObservability).expect("serialize action");
+        let back: ActionKind = serde_json::from_str(&json).expect("deserialize action");
+        assert_eq!(back, ActionKind::OpenObservability);
     }
 }
