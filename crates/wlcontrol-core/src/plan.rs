@@ -37,6 +37,9 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
     if !role_satisfies(state.role, required) {
         return Some(Unavailable::InsufficientRole { required });
     }
+    if let Some(reason) = capability_block(action, state) {
+        return Some(reason);
+    }
 
     match action {
         ActionKind::Start { vm } => running_vm(state, vm)
@@ -65,6 +68,53 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
         ActionKind::UsbDetach { vm, bus_id } => usb_detach_block(state, vm, bus_id),
         ActionKind::StoreVerify { .. } | ActionKind::Build { .. } | ActionKind::Boot { .. } => None,
         _ => None,
+    }
+}
+
+fn capability_block(action: &ActionKind, state: &WlState) -> Option<Unavailable> {
+    let vm = action_target_vm(action)?;
+    let target = running_vm(state, vm)?;
+    let supported = match action {
+        ActionKind::Start { .. } => target.capabilities.start,
+        ActionKind::Stop { .. } => target.capabilities.stop,
+        ActionKind::Restart { .. } => target.capabilities.restart,
+        ActionKind::Switch { .. } => target.capabilities.switch,
+        ActionKind::Build { .. } => target.capabilities.build,
+        ActionKind::Boot { .. } => target.capabilities.boot,
+        ActionKind::UsbAttach { .. } | ActionKind::UsbDetach { .. } => {
+            target.capabilities.usb_hotplug
+        }
+        ActionKind::StoreVerify { .. } => target.capabilities.store_verify,
+        ActionKind::LaunchTerminal { .. } | ActionKind::QuickLaunch { .. } => {
+            target.capabilities.terminal
+        }
+        _ => true,
+    };
+    (!supported).then(|| Unavailable::Blocked {
+        detail: "unsupported by this VM runtime".into(),
+    })
+}
+
+fn action_target_vm(action: &ActionKind) -> Option<&str> {
+    match action {
+        ActionKind::Start { vm }
+        | ActionKind::Stop { vm }
+        | ActionKind::Restart { vm }
+        | ActionKind::Switch { vm }
+        | ActionKind::Build { vm }
+        | ActionKind::Boot { vm }
+        | ActionKind::QuickLaunch { vm, .. }
+        | ActionKind::UsbAttach { vm, .. }
+        | ActionKind::UsbDetach { vm, .. }
+        | ActionKind::StoreVerify { vm }
+        | ActionKind::LaunchTerminal { vm }
+        | ActionKind::AudioMic { vm, .. }
+        | ActionKind::AudioSpeaker { vm, .. }
+        | ActionKind::AudioOff { vm } => Some(vm.as_str()),
+        ActionKind::Refresh
+        | ActionKind::OpenControlCenter
+        | ActionKind::OpenObservability
+        | ActionKind::CycleDisplay => None,
     }
 }
 
@@ -558,6 +608,49 @@ mod tests {
         ] {
             assert!(plan(&action, &running_admin, &Config::default()).is_ok());
         }
+    }
+
+    #[test]
+    fn runtime_capabilities_hide_unsupported_controls() {
+        let mut qemu = vm("media-vm", RuntimeState::Running);
+        qemu.capabilities.terminal = false;
+        qemu.capabilities.store_verify = false;
+        qemu.capabilities.switch = false;
+        qemu.capabilities.build = false;
+        qemu.capabilities.boot = false;
+        let state = connected_state(AuthRole::Admin, vec![qemu]);
+
+        for action in [
+            ActionKind::LaunchTerminal {
+                vm: "media-vm".into(),
+            },
+            ActionKind::StoreVerify {
+                vm: "media-vm".into(),
+            },
+            ActionKind::Switch {
+                vm: "media-vm".into(),
+            },
+            ActionKind::Build {
+                vm: "media-vm".into(),
+            },
+            ActionKind::Boot {
+                vm: "media-vm".into(),
+            },
+        ] {
+            assert!(matches!(
+                block_reason(&action, &state),
+                Some(Unavailable::Blocked { detail }) if detail == "unsupported by this VM runtime"
+            ));
+        }
+
+        assert!(block_reason(
+            &ActionKind::UsbAttach {
+                vm: "media-vm".into(),
+                bus_id: "1-2".into(),
+            },
+            &state
+        )
+        .is_none());
     }
 
     #[test]

@@ -17,7 +17,9 @@
 use std::collections::HashSet;
 
 use crate::config::Config;
-use crate::model::{AuthRole, Connectivity, QuickLaunchIcon, RuntimeState, UsbClaim, Vm, WlState};
+use crate::model::{
+    AuthRole, Connectivity, QuickLaunchIcon, RuntimeState, UsbClaim, Vm, VmCapabilities, WlState,
+};
 use crate::sources::{InventoryVm, ReduceInput, VmStatus};
 
 /// Reduce a bundle of source fragments into the aggregate [`WlState`].
@@ -97,6 +99,7 @@ fn build_vm(
     let coarse = coarse_state(inv.coarse_status.as_deref());
 
     let state = reduce_state(coarse, status.map(|s| s.state));
+    let capabilities = merge_capabilities(inv.capabilities, status.map(|s| s.capabilities));
 
     let usb = usb_claims
         .iter()
@@ -122,11 +125,16 @@ fn build_vm(
         hidden,
         pending_restart: show_pending_restart && status.map(|s| s.pending_restart).unwrap_or(false),
         features: inv.features,
+        capabilities,
         static_ip: inv.static_ip,
         readiness: status.map(|s| s.readiness.clone()).unwrap_or_default(),
         usb,
         quick_launch,
     }
+}
+
+fn merge_capabilities(inventory: VmCapabilities, status: Option<VmCapabilities>) -> VmCapabilities {
+    status.unwrap_or(inventory)
 }
 
 fn ordered_inventory(vms: Vec<InventoryVm>, favorites: &[String]) -> Vec<InventoryVm> {
@@ -195,6 +203,7 @@ mod tests {
             env: Some("work".into()),
             is_net_vm: false,
             features: Default::default(),
+            capabilities: Default::default(),
             static_ip: None,
             coarse_status: coarse_status.map(String::from),
         }
@@ -227,6 +236,7 @@ mod tests {
                 state: RuntimeState::Running,
                 pending_restart: true,
                 readiness: vec!["api-ready".into()],
+                capabilities: Default::default(),
             }],
             usb: Some(UsbProbe::default()),
         };
@@ -375,6 +385,7 @@ mod tests {
                 state: RuntimeState::Running,
                 pending_restart: false,
                 readiness: vec![],
+                capabilities: Default::default(),
             }],
             ..Default::default()
         };
@@ -398,6 +409,7 @@ mod tests {
                 state: RuntimeState::Running,
                 pending_restart: true,
                 readiness: vec![],
+                capabilities: Default::default(),
             }],
             ..Default::default()
         };

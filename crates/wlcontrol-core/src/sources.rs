@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AuthRole, Connectivity, RuntimeState, UsbClaim, VmFeatures};
+use crate::model::{AuthRole, Connectivity, RuntimeState, UsbClaim, VmCapabilities, VmFeatures};
 
 /// One declared VM as reported by `nixling list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +23,8 @@ pub struct InventoryVm {
     pub is_net_vm: bool,
     #[serde(default)]
     pub features: VmFeatures,
+    #[serde(default)]
+    pub capabilities: VmCapabilities,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub static_ip: Option<String>,
     /// Coarse status string from `list` (`stopped`, `running`, ...). The
@@ -48,6 +50,8 @@ pub struct VmStatus {
     pub pending_restart: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub readiness: Vec<String>,
+    #[serde(default)]
+    pub capabilities: VmCapabilities,
 }
 
 /// USB claims from `nixling usb probe`.

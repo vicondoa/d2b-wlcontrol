@@ -42,9 +42,12 @@ fn refresh_populates_reduce_input_from_public_socket() {
     assert!(!inventory.vms[0].features.usbip);
     assert!(!inventory.vms[0].features.audio);
     assert_eq!(inventory.vms[0].static_ip.as_deref(), Some("10.1.0.10"));
+    assert!(inventory.vms[0].capabilities.usb_hotplug);
+    assert!(!inventory.vms[0].capabilities.terminal);
     assert_eq!(input.statuses.len(), 1);
     assert_eq!(input.statuses[0].state, RuntimeState::Running);
     assert!(input.statuses[0].pending_restart);
+    assert!(!input.statuses[0].capabilities.store_verify);
     let usb = input.usb.expect("usb");
     assert_eq!(usb.claims.len(), 1);
     assert!(usb.claims[0].bound);
@@ -514,7 +517,14 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
                     "pendingRestart": false,
                     "state": "Stopped"
                 },
-                "runtime": { "detail": "stopped" },
+                "runtime": {
+                    "detail": "stopped",
+                    "operationCapabilities": {
+                        "media": { "usbHotplug": true },
+                        "guest": { "exec": false },
+                        "storage": { "storeSync": false }
+                    }
+                },
                 "sshUser": "alice",
                 "vm": "corp-vm"
             }]
@@ -528,7 +538,15 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
                     "pendingRestart": true,
                     "state": "Running"
                 },
-                "runtime": { "detail": "running" },
+                "runtime": {
+                    "detail": "running",
+                    "operationCapabilities": {
+                        "lifecycle": { "switch": false },
+                        "media": { "usbHotplug": true },
+                        "guest": { "exec": false },
+                        "storage": { "storeSync": false }
+                    }
+                },
                 "sshUser": "alice",
                 "staticIp": "10.1.0.10",
                 "vm": "corp-vm"
