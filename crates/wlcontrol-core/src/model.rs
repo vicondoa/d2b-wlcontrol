@@ -84,6 +84,37 @@ pub struct VmFeatures {
     pub audio: bool,
 }
 
+/// Runtime operations the connected nixling daemon says this VM supports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VmCapabilities {
+    pub start: bool,
+    pub stop: bool,
+    pub restart: bool,
+    pub switch: bool,
+    pub build: bool,
+    pub boot: bool,
+    pub usb_hotplug: bool,
+    pub store_verify: bool,
+    pub terminal: bool,
+}
+
+impl Default for VmCapabilities {
+    fn default() -> Self {
+        Self {
+            start: true,
+            stop: true,
+            restart: true,
+            switch: true,
+            build: true,
+            boot: true,
+            usb_hotplug: true,
+            store_verify: true,
+            terminal: true,
+        }
+    }
+}
+
 /// A custom per-VM quick-launch icon surfaced by the popup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,6 +147,9 @@ pub struct Vm {
     /// Declared feature toggles.
     #[serde(default)]
     pub features: VmFeatures,
+    /// Runtime operation support reported by nixling.
+    #[serde(default)]
+    pub capabilities: VmCapabilities,
     /// Static IP, when declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub static_ip: Option<String>,
@@ -341,6 +375,7 @@ mod tests {
                     hidden: false,
                     pending_restart: false,
                     features: VmFeatures::default(),
+                    capabilities: VmCapabilities::default(),
                     static_ip: None,
                     readiness: vec![],
                     usb: vec![],
@@ -354,6 +389,7 @@ mod tests {
                     hidden: false,
                     pending_restart: false,
                     features: VmFeatures::default(),
+                    capabilities: VmCapabilities::default(),
                     static_ip: None,
                     readiness: vec![],
                     usb: vec![],
@@ -382,6 +418,7 @@ mod tests {
             hidden: false,
             pending_restart: true,
             features: VmFeatures::default(),
+            capabilities: VmCapabilities::default(),
             static_ip: None,
             readiness: vec![],
             usb: vec![],
@@ -403,6 +440,7 @@ mod tests {
                 hidden: true,
                 pending_restart: true,
                 features: VmFeatures::default(),
+                capabilities: VmCapabilities::default(),
                 static_ip: None,
                 readiness: vec![],
                 usb: vec![],

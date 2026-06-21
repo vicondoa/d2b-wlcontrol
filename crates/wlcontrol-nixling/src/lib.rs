@@ -19,7 +19,9 @@ use std::{path::Path, time::Duration};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use wlcontrol_core::error::{WlError, WlResult};
-use wlcontrol_core::model::{AuthRole, Connectivity, RuntimeState, SocketIntent, UsbClaim};
+use wlcontrol_core::model::{
+    AuthRole, Connectivity, RuntimeState, SocketIntent, UsbClaim, VmCapabilities,
+};
 use wlcontrol_core::sources::{Auth, Inventory, InventoryVm, ReduceInput, UsbProbe, VmStatus};
 use wlcontrol_core::Config;
 
@@ -568,6 +570,7 @@ fn inventory_vm_from_value(value: &Value) -> Option<InventoryVm> {
         env: string_field(value, &["env"]),
         is_net_vm: bool_field(value, &["isNetVm", "is_net_vm"]).unwrap_or(false),
         features: wlcontrol_core::model::VmFeatures::default(),
+        capabilities: capabilities_from_value(value),
         static_ip: None,
         coarse_status: nested_string_field(value, &["lifecycle"], &["state"])
             .or_else(|| runtime_text(value.get("runtime"))),
@@ -609,6 +612,7 @@ fn status_snapshot_from_payload(payload: &Value, requested_vm: &str) -> Option<S
             state,
             pending_restart,
             readiness,
+            capabilities: capabilities_from_value(candidate),
         },
         static_ip,
     })
@@ -717,6 +721,78 @@ fn usb_claim_from_value(value: &Value) -> Option<UsbClaim> {
         bound: bool_field(value, &["bound"]).unwrap_or_else(|| status == "bound"),
         owner_vm: string_field(value, &["ownerVm", "owner_vm"]),
     })
+}
+
+fn capabilities_from_value(value: &Value) -> VmCapabilities {
+    let mut capabilities = VmCapabilities::default();
+    if let Some(runtime) = value.get("runtime") {
+        apply_positive_capabilities(&mut capabilities, runtime);
+    }
+    apply_unsupported_capabilities(&mut capabilities, value);
+    capabilities
+}
+
+fn apply_positive_capabilities(capabilities: &mut VmCapabilities, runtime: &Value) {
+    let Some(operation) = runtime
+        .get("operationCapabilities")
+        .or_else(|| runtime.get("operation_capabilities"))
+    else {
+        return;
+    };
+    if let Some(lifecycle) = operation.get("lifecycle") {
+        if let Some(v) = bool_field(lifecycle, &["start"]) {
+            capabilities.start = v;
+        }
+        if let Some(v) = bool_field(lifecycle, &["stop"]) {
+            capabilities.stop = v;
+        }
+        if let Some(v) = bool_field(lifecycle, &["restart"]) {
+            capabilities.restart = v;
+        }
+        if let Some(v) = bool_field(lifecycle, &["switch"]) {
+            capabilities.switch = v;
+            capabilities.build = v;
+            capabilities.boot = v;
+        }
+    }
+    if let Some(media) = operation.get("media") {
+        if let Some(v) = bool_field(media, &["usbHotplug", "usb_hotplug"]) {
+            capabilities.usb_hotplug = v;
+        }
+    }
+    if let Some(guest) = operation.get("guest") {
+        if let Some(v) = bool_field(guest, &["exec"]) {
+            capabilities.terminal = v;
+        }
+    }
+    if let Some(storage) = operation.get("storage") {
+        if let Some(v) = bool_field(storage, &["storeSync", "store_sync"]) {
+            capabilities.store_verify = v;
+        }
+    }
+}
+
+fn apply_unsupported_capabilities(capabilities: &mut VmCapabilities, value: &Value) {
+    let Some(items) = value
+        .get("unsupportedCapabilities")
+        .or_else(|| value.get("unsupported_capabilities"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    for item in items.iter().filter_map(Value::as_str) {
+        match item {
+            "exec" | "guest-control" => capabilities.terminal = false,
+            "store-sync" => capabilities.store_verify = false,
+            "config-sync" => {
+                capabilities.switch = false;
+                capabilities.build = false;
+                capabilities.boot = false;
+            }
+            "usb-hotplug" => capabilities.usb_hotplug = false,
+            _ => {}
+        }
+    }
 }
 
 fn map_auth_role(role: Option<&str>) -> AuthRole {

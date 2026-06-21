@@ -236,6 +236,7 @@ mod tests {
             hidden: false,
             pending_restart: false,
             features: VmFeatures::default(),
+            capabilities: Default::default(),
             static_ip: None,
             readiness: vec![],
             usb: vec![],
