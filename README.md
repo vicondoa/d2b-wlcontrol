@@ -28,8 +28,8 @@ official `d2b` CLI.
   effective d2b authorization.
 - **d2b-native colors** — Waybar CSS consumes d2b's generated
   `/etc/d2b/ui-colors.css` GTK `@define-color` names, while the popup
-  consumes `/etc/d2b/ui-colors.json` and renders without color if d2b
-  did not provide a valid color.
+  keeps neutral shell colors local and consumes `/etc/d2b/ui-colors.json`
+  for colored accent/border surfaces.
 - **Safe by construction** — public socket only; no broker socket, no
   `sudo`, no direct state-file mutation, argv-only command execution.
 

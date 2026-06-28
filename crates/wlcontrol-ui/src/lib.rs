@@ -2,8 +2,9 @@
 //!
 //! `d2b-wlcontrol` is a Waybar-adjacent desktop shell widget, not a
 //! document-style application. The visible frontend is therefore a Quickshell
-//! layer-shell popup themed from d2b's UI color artifact, while Rust remains the
-//! backend (`status-json` + `action …`) and the safe process launcher.
+//! layer-shell popup with neutral shell styling and d2b-owned accent colors,
+//! while Rust remains the backend (`status-json` + `action …`) and the safe
+//! process launcher.
 
 use std::{
     env, fs,
@@ -205,7 +206,7 @@ fn cmdline_matches_quickshell(pid: u32, runtime_dir: &Path) -> bool {
 ///
 /// Notes:
 /// - Uses argv-vector `Process` commands; no shell strings.
-/// - Colours come from d2b's generated UI color artifact.
+/// - Neutral shell colors stay local; colored accents come from d2b's UI artifact.
 /// - The panel is a draggable layer-shell overlay anchored near the top-right.
 const QML_SOURCE: &str = r##"
 //@ pragma StateDir $XDG_STATE_HOME/d2b-wlcontrol/quickshell
@@ -1006,7 +1007,7 @@ ShellRoot {
                         anchors.leftMargin: 9
                         anchors.rightMargin: 9
                         color: "#ffffff"
-                        selectionColor: "#89b4fa"
+                        selectionColor: root.hostAccentColor()
                         selectedTextColor: "#000000"
                         font.pixelSize: 12
                         verticalAlignment: TextInput.AlignVCenter
@@ -1074,7 +1075,7 @@ ShellRoot {
   component IconButton: Rectangle {
     property alias text: label.text
     property string tooltip: ""
-    property color accent: "#89b4fa"
+    property color accent: "#6c7086"
     property bool prominent: false
     signal clicked()
     width: prominent ? 30 : 26
@@ -1111,7 +1112,7 @@ ShellRoot {
     property string icon: ""
     property string label: ""
     property string tooltip: ""
-    property color accent: "#89b4fa"
+    property color accent: "#6c7086"
     signal clicked()
 
     height: 24
@@ -1175,11 +1176,15 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("onExited: (exitCode, exitStatus)"));
         assert!(QML_SOURCE.contains("D2B_WLCONTROL_OBSERVABILITY_ENABLED"));
         assert!(QML_SOURCE.contains("D2B_WLCONTROL_THEME_JSON"));
+        assert!(QML_SOURCE.contains("color: \"#16181d\""));
+        assert!(QML_SOURCE.contains("color: \"#ffffff\""));
+        assert!(QML_SOURCE.contains("color: \"#9399b2\""));
         assert!(!QML_SOURCE.contains("D2B_WLCONTROL_STATE_COLORS"));
         assert!(!QML_SOURCE.contains("D2B_WLCONTROL_ENV_COLORS"));
         assert!(!QML_SOURCE.contains("D2B_WLCONTROL_HOST_ACCENT"));
         assert!(!QML_SOURCE.contains("fallbackStateColors"));
         assert!(!QML_SOURCE.contains("fallbackHostAccent"));
+        assert!(!QML_SOURCE.contains("property color accent: \"#89b4fa\""));
         assert!(QML_SOURCE.contains("function stateColor(name)"));
         assert!(QML_SOURCE.contains("return isHexColor(color) ? color : \"transparent\""));
         assert!(QML_SOURCE.contains("function vmBorderColor(vm)"));

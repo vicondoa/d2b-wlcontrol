@@ -38,8 +38,9 @@ pendingRestart, error, denied, unknown }, envs: { <env>: { accent } },
 vms: { <vm>: { env, border: { active, inactive, urgent } } } }`.
 
 `d2b-wlcontrol open` reads the configured d2b color artifact and passes
-it to the popup as `D2B_WLCONTROL_THEME_JSON`. The popup uses state
-colors for VM dots and action feedback, per-VM active border colors for
-card borders, and env accents for card stripes. Missing, invalid, or
-malformed color data is ignored and the affected surfaces render without
-color instead of using wlcontrol-owned defaults.
+it to the popup as `D2B_WLCONTROL_THEME_JSON`. The popup keeps its
+neutral black/white/gray shell colors locally, but uses d2b state colors
+for VM dots and action feedback, per-VM active border colors for card
+borders, and env accents for card stripes. Missing, invalid, or malformed
+color data is ignored and the affected colored accent/border surfaces
+render without color instead of using wlcontrol-owned color defaults.

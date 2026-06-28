@@ -26,9 +26,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **Quickshell VM card colors.** VM card borders again use d2b's per-VM
   active border colors, while the left accent stripe continues to use
   environment accents.
-- **d2b-only popup colors.** The Quickshell popup no longer ships its own
-  default palette; if d2b does not provide a valid color artifact, affected
-  surfaces render without color.
+- **d2b-only popup accents.** The Quickshell popup keeps its neutral
+  black/white/gray shell colors, but no longer ships its own colored accent
+  palette; if d2b does not provide a valid color artifact, affected colored
+  accent/border surfaces render without color.
 - **Waybar CSS color references.** Updated the starter stylesheet and docs
   to consume d2b's generated GTK `@define-color` names
   (`@d2b_state_*`) instead of legacy CSS custom properties.
