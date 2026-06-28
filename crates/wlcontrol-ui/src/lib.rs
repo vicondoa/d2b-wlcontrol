@@ -436,6 +436,20 @@ ShellRoot {
     return ""
   }
 
+  function audioBadgeAccent(vm) {
+    const badge = root.audioBadge(vm)
+    if (badge === "hot mic" || (vm.audio && vm.audio.errorKind)) return "#ffb3bd"
+    if (badge.length > 0) return root.stateColor("pendingRestart")
+    return "#6c7086"
+  }
+
+  function audioBadgeFill(vm) {
+    const badge = root.audioBadge(vm)
+    if (badge === "hot mic" || (vm.audio && vm.audio.errorKind)) return "#3a171b"
+    if (badge.length > 0) return "#2e2a1a"
+    return "transparent"
+  }
+
   function audioLevel(channel, fallback) {
     if (!channel || channel.level === undefined || channel.level === null) return fallback
     return root.clamp(channel.level, 0, 100)
@@ -947,8 +961,25 @@ ShellRoot {
                         color: "#9399b2"
                         font.pixelSize: 11
                         elide: Text.ElideRight
-                        text: root.vmMeta(vm)
+                        text: root.vmMeta(vm).replace(" · hot mic", "")
                       }
+                    }
+                  }
+
+                  Rectangle {
+                    visible: root.audioBadge(vm).length > 0
+                    width: parent.width
+                    height: 22
+                    radius: 999
+                    color: root.audioBadgeFill(vm)
+                    border.color: root.audioBadgeAccent(vm)
+                    border.width: 1
+                    Text {
+                      anchors.centerIn: parent
+                      color: root.audioBadgeAccent(vm)
+                      font.pixelSize: 11
+                      font.bold: true
+                      text: root.audioBadge(vm)
                     }
                   }
 
@@ -1001,14 +1032,6 @@ ShellRoot {
                         accent: root.stateColor("error")
                         enabled: root.canAudio(vm)
                         onClicked: root.action(["audio-off", vm.name])
-                      }
-                      Rectangle {
-                        visible: root.audioBadge(vm).length > 0
-                        height: 24
-                        width: audioBadgeText.width + 18
-                        radius: 999
-                        color: "#2e2a1a"
-                        Text { id: audioBadgeText; anchors.centerIn: parent; color: vm.audio && (vm.audio.errorKind || root.audioBadge(vm) === "hot mic") ? root.stateColor("error") : root.stateColor("pendingRestart"); font.pixelSize: 10; font.bold: true; text: root.audioBadge(vm) }
                       }
                     }
 
@@ -1204,15 +1227,16 @@ ShellRoot {
     height: prominent ? 30 : 26
     radius: width / 2
     opacity: enabled ? 1.0 : 0.28
-    border.width: 0
+    border.width: prominent ? 1 : 0
+    border.color: prominent ? accent : "transparent"
     color: prominent
-      ? Qt.rgba(accent.r, accent.g, accent.b, mouse.containsMouse ? 0.22 : 0.15)
+      ? Qt.rgba(accent.r, accent.g, accent.b, mouse.containsMouse ? 0.34 : 0.24)
       : (mouse.containsMouse ? Qt.rgba(accent.r, accent.g, accent.b, 0.12) : "transparent")
 
     Text {
       id: label
       anchors.fill: parent
-      color: parent.accent
+      color: parent.prominent ? "#f5f7ff" : parent.accent
       font.family: "Material Symbols Rounded"
       font.pixelSize: prominent ? 21 : 20
       font.bold: false
@@ -1378,15 +1402,16 @@ ShellRoot {
     property string label: ""
     property string tooltip: ""
     property color accent: "#6c7086"
+    property color foreground: enabled ? "#f5f7ff" : "#bac2de"
     signal clicked()
 
-    height: 24
-    width: chipRow.implicitWidth + 16
+    height: 28
+    width: chipRow.implicitWidth + 20
     radius: 999
     activeFocusOnTab: true
-    opacity: enabled ? 1.0 : 0.34
-    color: mouse.containsMouse && enabled ? Qt.rgba(accent.r, accent.g, accent.b, 0.15) : Qt.rgba(accent.r, accent.g, accent.b, enabled ? 0.085 : 0.045)
-    border.color: activeFocus ? root.hostAccentColor() : Qt.rgba(accent.r, accent.g, accent.b, enabled ? 0.18 : 0.10)
+    opacity: enabled ? 1.0 : 0.54
+    color: mouse.containsMouse && enabled ? Qt.rgba(accent.r, accent.g, accent.b, 0.28) : Qt.rgba(accent.r, accent.g, accent.b, enabled ? 0.18 : 0.08)
+    border.color: activeFocus ? root.hostAccentColor() : Qt.rgba(accent.r, accent.g, accent.b, enabled ? 0.42 : 0.16)
     border.width: 1
     Keys.onSpacePressed: if (enabled) clicked()
     Keys.onReturnPressed: if (enabled) clicked()
@@ -1396,17 +1421,17 @@ ShellRoot {
       anchors.centerIn: parent
       spacing: 5
       Text {
-        color: parent.parent.accent
+        color: parent.parent.foreground
         font.family: "Material Symbols Rounded"
-        font.pixelSize: 16
+        font.pixelSize: 17
         height: parent.parent.height
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         text: parent.parent.icon
       }
       Text {
-        color: parent.parent.accent
-        font.pixelSize: 10
+        color: parent.parent.foreground
+        font.pixelSize: 11
         font.bold: true
         height: parent.parent.height
         verticalAlignment: Text.AlignVCenter

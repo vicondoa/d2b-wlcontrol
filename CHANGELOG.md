@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Audio control visual polish.** The Quickshell popup now renders
+  high-contrast audio chips, a prominent hot-mic warning badge, and more
+  legible disabled/destructive controls in expanded VM cards.
 - **Fast VM lifecycle.** Start and Restart actions now send d2bd
   `noWaitApi=true`, so the control surface returns success once the VM process
   is supervised and lets the normal status refresh show api-ready/readiness
