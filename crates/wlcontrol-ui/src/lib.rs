@@ -1249,8 +1249,18 @@ ShellRoot {
     border.width: 1
     Keys.onLeftPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue - 5, 0, 100); commitTimer.restart() }
     Keys.onRightPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue + 5, 0, 100); commitTimer.restart() }
-    Keys.onPageDownPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue - 10, 0, 100); commitTimer.restart() }
-    Keys.onPageUpPressed: if (enabled && !dragging) { draftValue = root.clamp(draftValue + 10, 0, 100); commitTimer.restart() }
+    Keys.onPressed: (event) => {
+      if (!enabled || dragging) return
+      if (event.key === Qt.Key_PageDown) {
+        draftValue = root.clamp(draftValue - 10, 0, 100)
+        commitTimer.restart()
+        event.accepted = true
+      } else if (event.key === Qt.Key_PageUp) {
+        draftValue = root.clamp(draftValue + 10, 0, 100)
+        commitTimer.restart()
+        event.accepted = true
+      }
+    }
 
     onValueChanged: if (!dragging && !commitTimer.running) draftValue = value
     onEnabledChanged: if (!enabled) { commitTimer.stop(); dragging = false; draftValue = value }
