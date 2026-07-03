@@ -117,6 +117,11 @@ generated UI color artifact. Theme values must be normalized lowercase
 `#rrggbb` strings so errors are caught at config load instead of silently
 falling back.
 
+This palette does not configure host VM window borders. For graphics VMs routed
+through d2b's Wayland proxy, VM identity borders are drawn by
+`d2b-wayland-proxy` from d2b's `d2b.vms.<vm>.ui.border.*` model. wlcontrol only
+renders status/control UI around that model.
+
 ## Per-VM quick-launch icons
 
 `[[quick_launch]]` entries add custom icon buttons to the always-visible icon
