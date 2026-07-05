@@ -12,6 +12,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
   broker-socket refusal, Waybar JSON serialization, color validation, and
   process-argv redaction now use shared d2b toolkit crates without changing the
   CLI, Waybar, or popup UX.
+- **Portable toolkit input.** The flake now consumes `d2b-toolkit` from a GitHub
+  flake input with `nixpkgs` following the caller instead of a developer-local
+  absolute path.
 
 ### Fixed
 

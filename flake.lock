@@ -7,14 +7,18 @@
         ]
       },
       "locked": {
-        "lastModified": 1783277715,
-        "narHash": "sha256-DdT/YuJqp2aR3I7ZxrwxqnkvacWdP4S7GcU9sYuGJVo=",
-        "path": "/home/paydro/projects/d2b-toolkit",
-        "type": "path"
+        "lastModified": 1783281408,
+        "narHash": "sha256-TO1aDZnvHGB0kodpbyGPwSAhwFtV2rv0FQj3pUZQR/g=",
+        "owner": "vicondoa",
+        "repo": "d2b-toolkit",
+        "rev": "e93b17ab7fcce8a5a9f232c3c411f8082e56b706",
+        "type": "github"
       },
       "original": {
-        "path": "/home/paydro/projects/d2b-toolkit",
-        "type": "path"
+        "owner": "vicondoa",
+        "ref": "terminal-integration-toolkit",
+        "repo": "d2b-toolkit",
+        "type": "github"
       }
     },
     "nixpkgs": {
