@@ -14,7 +14,8 @@ CLI.
 
 > Status: the Waybar indicator, the live d2bd public-socket client,
 > the reduced status model, auth-gated action planning, Quickshell
-> layer-shell popup, and d2b audio controls are all in place.
+> layer-shell popup, d2b audio controls, and shared toolkit-backed
+> protocol / Waybar helpers are all in place.
 
 ## What it does
 

@@ -17,6 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
+use d2b_toolkit_core::Redacted;
 use serde::Serialize;
 use wlcontrol_core::model::{ActionKind, Connectivity, Unavailable};
 use wlcontrol_core::{plan, reduce, Config, PlannedAction, WlState};
@@ -382,6 +383,7 @@ fn run_process(
     wait: bool,
     config: &Config,
 ) -> wlcontrol_core::WlResult<ExitCode> {
+    let argv = Redacted::new(argv).into_inner_for_wire();
     let Some((program, args)) = argv.split_first() else {
         return Err(wlcontrol_core::WlError::Config(
             "empty process argv".to_owned(),
@@ -762,6 +764,17 @@ mod tests {
             DisplayMode::Compact
         );
         assert_eq!(display_mode_name(DisplayMode::Detail), "detail");
+    }
+
+    #[test]
+    fn toolkit_redacted_argv_debug_omits_process_values() {
+        let argv = Redacted::new(vec![
+            "d2b".to_owned(),
+            "vm".to_owned(),
+            "exec".to_owned(),
+            "corp-vm".to_owned(),
+        ]);
+        assert_eq!(format!("{argv:?}"), "[redacted]");
     }
 
     #[test]

@@ -12,6 +12,8 @@
 use serde::{Deserialize, Serialize};
 use wlcontrol_core::model::{AuthRole, Connectivity, RuntimeState, Vm, WlState};
 
+use d2b_wayland_waybar::WaybarModule;
+
 const DETAIL_VM_LIMIT: usize = 5;
 
 /// Text density for the Waybar module.
@@ -34,8 +36,14 @@ pub struct WaybarLine {
 impl WaybarLine {
     /// Serialize to a single newline-terminated JSON line, as Waybar expects.
     pub fn to_json_line(&self) -> String {
-        // Serialization of a flat struct of strings cannot fail.
-        let mut s = serde_json::to_string(self).unwrap_or_else(|_| {
+        let module = WaybarModule {
+            text: self.text.clone(),
+            alt: None,
+            tooltip: Some(self.tooltip.clone()),
+            class: self.class.clone(),
+            percentage: None,
+        };
+        let mut s = module.to_waybar_json().unwrap_or_else(|_| {
             "{\"text\":\"\",\"class\":[\"error\"],\"tooltip\":\"render error\"}".to_owned()
         });
         s.push('\n');
@@ -515,5 +523,20 @@ mod tests {
         let json = line.to_json_line();
         assert_eq!(json.matches('\n').count(), 1);
         assert!(json.ends_with('\n'));
+    }
+
+    #[test]
+    fn json_line_uses_toolkit_waybar_shape_without_changing_fields() {
+        let line = WaybarLine {
+            text: "◆ 1/1".to_owned(),
+            class: vec!["all-running".to_owned()],
+            tooltip: "ready".to_owned(),
+        };
+        let value: serde_json::Value = serde_json::from_str(line.to_json_line().trim()).unwrap();
+        assert_eq!(value["text"], "◆ 1/1");
+        assert_eq!(value["tooltip"], "ready");
+        assert_eq!(value["class"], serde_json::json!(["all-running"]));
+        assert!(value.get("alt").is_none());
+        assert!(value.get("percentage").is_none());
     }
 }

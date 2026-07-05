@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "d2b-toolkit": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1783277715,
+        "narHash": "sha256-DdT/YuJqp2aR3I7ZxrwxqnkvacWdP4S7GcU9sYuGJVo=",
+        "path": "/home/paydro/projects/d2b-toolkit",
+        "type": "path"
+      },
+      "original": {
+        "path": "/home/paydro/projects/d2b-toolkit",
+        "type": "path"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1781074563,
@@ -18,6 +35,7 @@
     },
     "root": {
       "inputs": {
+        "d2b-toolkit": "d2b-toolkit",
         "nixpkgs": "nixpkgs"
       }
     }

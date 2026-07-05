@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Shared toolkit integration.** Public-socket framing, hello negotiation DTOs,
+  broker-socket refusal, Waybar JSON serialization, color validation, and
+  process-argv redaction now use shared d2b toolkit crates without changing the
+  CLI, Waybar, or popup UX.
+
 ### Fixed
 
 - **Audio control visual polish.** The Quickshell popup now renders

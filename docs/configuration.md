@@ -98,7 +98,9 @@ guest_argv = ["/run/current-system/sw/bin/ghostty"]
 
 An empty terminal command is rejected at config load, and a `public_socket`
 pointing at the privileged broker socket (`priv.sock`) is refused — the control
-surface speaks only the public socket.
+surface speaks only the public socket. Socket classification uses the shared
+d2b toolkit guard, so custom paths named `priv.sock` are rejected before any
+connection attempt.
 
 ## Observability opens a URL only
 
@@ -115,7 +117,9 @@ backgrounds, card surfaces, text, muted text, borders, and input/slider fills.
 d2b-owned state, environment, and VM-border accents still come from d2b's
 generated UI color artifact. Theme values must be normalized lowercase
 `#rrggbb` strings so errors are caught at config load instead of silently
-falling back.
+falling back. The validator uses the shared d2b Wayland color parser and then
+requires the normalized lowercase rendering, so shorthand, uppercase, and alpha
+forms remain invalid for this palette.
 
 This palette does not configure host VM application window borders. wlcontrol
 still reads d2b's generated UI artifact and uses d2b state/accent/VM colors in
