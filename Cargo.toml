@@ -21,6 +21,12 @@ authors = ["vicondoa"]
 wlcontrol-core = { path = "crates/wlcontrol-core" }
 wlcontrol-d2b = { path = "crates/wlcontrol-d2b" }
 
+# Shared d2b desktop toolkit crates.
+d2b-client = { path = "../d2b-toolkit/crates/d2b-client" }
+d2b-toolkit-core = { path = "../d2b-toolkit/crates/d2b-toolkit-core" }
+d2b-wayland-core = { path = "../d2b-toolkit/crates/d2b-wayland-core" }
+d2b-wayland-waybar = { path = "../d2b-toolkit/crates/d2b-wayland-waybar" }
+
 # Shared third-party dependencies. Versions are pinned at the workspace
 # level so every crate speaks the same serde / error surface.
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +36,7 @@ toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 nix = { version = "0.29", features = ["socket", "uio"] }
 directories = "5"
+futures = "0.3"
 
 [profile.release]
 opt-level = 2

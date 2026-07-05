@@ -695,6 +695,10 @@ fn serve_connection(listener: &OwnedFd, mode: FakeMode, expected_request: Option
         hello.get("clientVersion").and_then(Value::as_str),
         Some(">=0.4.0, <0.5.0")
     );
+    assert_eq!(
+        hello.get("supportedFeatures"),
+        Some(&json!(["typed-errors", "export-broker-audit"]))
+    );
 
     if matches!(mode, FakeMode::RejectHello) {
         send_json(
@@ -1214,7 +1218,8 @@ fn send_hello_then_close(path: &Path) {
         &fd,
         json!({
             "type": "hello",
-            "clientVersion": ">=0.4.0, <0.5.0"
+            "clientVersion": ">=0.4.0, <0.5.0",
+            "supportedFeatures": ["typed-errors", "export-broker-audit"]
         }),
     )
     .expect("send hello");

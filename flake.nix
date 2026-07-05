@@ -3,10 +3,14 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    d2b-toolkit = {
+      url = "github:vicondoa/d2b-toolkit";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    { self, nixpkgs, d2b-toolkit }:
     let
       systems = [
         "x86_64-linux"
@@ -43,6 +47,10 @@
               wrapProgram "$out/bin/d2b-wlcontrol" \
                 --prefix PATH : ${pkgs.lib.makeBinPath (runtimeBins pkgs)} \
                 --prefix XDG_DATA_DIRS : ${pkgs.lib.makeSearchPath "share" (runtimeFonts pkgs)}
+            '';
+
+            postPatch = ''
+              ln -s ${d2b-toolkit.packages.${system}.default}/share/d2b-toolkit ../d2b-toolkit
             '';
 
             meta = with pkgs.lib; {

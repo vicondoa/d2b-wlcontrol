@@ -96,9 +96,54 @@ guest_argv = ["/run/current-system/sw/bin/foot"]
 guest_argv = ["/run/current-system/sw/bin/ghostty"]
 ```
 
+This is separate from `d2b-wlterm`. Use `d2b-wlterm` when you want a host
+launcher for persistent named shells; use `terminal.guest_argv` here when the
+popup should start a detached command inside the VM through `d2b vm exec`.
+
 An empty terminal command is rejected at config load, and a `public_socket`
 pointing at the privileged broker socket (`priv.sock`) is refused — the control
-surface speaks only the public socket.
+surface speaks only the public socket. Socket classification uses the shared
+d2b toolkit guard, so custom paths named `priv.sock` are rejected before any
+connection attempt.
+
+## Flake input alignment
+
+Use one `nixpkgs` and one `d2b-toolkit` input when installing multiple desktop
+companions:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    d2b = {
+      url = "github:vicondoa/d2b";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    d2b-toolkit = {
+      url = "github:vicondoa/d2b-toolkit";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    d2b-wlcontrol = {
+      url = "github:vicondoa/d2b-wlcontrol";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.d2b-toolkit.follows = "d2b-toolkit";
+    };
+
+    d2b-wlterm = {
+      url = "github:vicondoa/d2b-wlterm";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.d2b-toolkit.follows = "d2b-toolkit";
+    };
+  };
+}
+```
+
+The package build rewrites local Cargo path dependencies through the packaged
+toolkit source, so the flake lock selects the exact public-socket and Waybar
+helper revision used by the control binary.
 
 ## Observability opens a URL only
 
@@ -115,7 +160,9 @@ backgrounds, card surfaces, text, muted text, borders, and input/slider fills.
 d2b-owned state, environment, and VM-border accents still come from d2b's
 generated UI color artifact. Theme values must be normalized lowercase
 `#rrggbb` strings so errors are caught at config load instead of silently
-falling back.
+falling back. The validator uses the shared d2b Wayland color parser and then
+requires the normalized lowercase rendering, so shorthand, uppercase, and alpha
+forms remain invalid for this palette.
 
 This palette does not configure host VM application window borders. wlcontrol
 still reads d2b's generated UI artifact and uses d2b state/accent/VM colors in

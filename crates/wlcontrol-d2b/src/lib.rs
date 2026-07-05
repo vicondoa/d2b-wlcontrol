@@ -16,7 +16,12 @@
 
 use std::{path::Path, time::Duration};
 
-use serde::{Deserialize, Serialize};
+use d2b_client::ensure_allowed_socket;
+use d2b_toolkit_core::{
+    Hello, HelloFrame, HelloOk, HelloRejected, HelloRejectedReason, HelloResponse,
+    KnownFeatureFlag, SemverRange, SocketClass,
+};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use wlcontrol_core::error::{WlError, WlResult};
 use wlcontrol_core::model::{
@@ -35,7 +40,6 @@ pub mod wire;
 use transport::SeqpacketTransport;
 
 const CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
-const CLIENT_FEATURES: &[&str] = &["typed-errors", "export-broker-audit"];
 
 /// Outcome of a single dispatched mutating intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -480,11 +484,13 @@ fn request_value(transport: &SeqpacketTransport, payload: Vec<u8>) -> WlResult<V
 }
 
 fn hello_frame() -> WlResult<Vec<u8>> {
-    let payload = HelloFrame {
-        type_name: "hello",
-        client_version: CLIENT_VERSION_RANGE,
-        supported_features: CLIENT_FEATURES,
-    };
+    let payload = HelloFrame::new(Hello {
+        client_version: SemverRange::new(CLIENT_VERSION_RANGE),
+        supported_features: vec![
+            KnownFeatureFlag::TypedErrors.wire_value(),
+            KnownFeatureFlag::ExportBrokerAudit.wire_value(),
+        ],
+    });
     serde_json::to_vec(&payload).map_err(WlError::from)
 }
 
@@ -530,6 +536,9 @@ fn parse_hello_reply(bytes: &[u8]) -> WlResult<()> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|err| WlError::Protocol(format!("invalid hello JSON from d2bd: {err}")))?;
     reject_error_response(&value)?;
+    if let Ok(response) = serde_json::from_value::<HelloResponse>(value.clone()) {
+        return validate_toolkit_hello_response(response);
+    }
     let type_name = value.get("type").and_then(Value::as_str);
     if type_name == Some("helloRejected") {
         let reason = value
@@ -566,6 +575,34 @@ fn parse_hello_reply(bytes: &[u8]) -> WlResult<()> {
             "d2bd selected unsupported protocol version {selected}: {reason}"
         ))
     })
+}
+
+fn validate_toolkit_hello_response(response: HelloResponse) -> WlResult<()> {
+    match response {
+        HelloResponse::HelloOk(HelloOk {
+            selected_version, ..
+        }) => selected_version_supported(selected_version.as_str()).map_err(|reason| {
+            WlError::Protocol(format!(
+                "d2bd selected unsupported protocol version {}: {reason}",
+                selected_version.as_str()
+            ))
+        }),
+        HelloResponse::HelloRejected(HelloRejected { reason, error }) => match reason {
+            HelloRejectedReason::VersionMismatch => {
+                Err(WlError::Protocol("d2bd rejected client version".to_owned()))
+            }
+            HelloRejectedReason::CapabilityNegotiationFailed => Err(WlError::Protocol(
+                "d2bd rejected client capabilities".to_owned(),
+            )),
+            HelloRejectedReason::InternalError => Err(DaemonError {
+                kind: error.kind,
+                exit_code: Some(error.exit_code),
+                message: error.message,
+                remediation: Some(error.remediation),
+            }
+            .into_wl_error()),
+        },
+    }
 }
 
 fn selected_version_supported(version: &str) -> Result<(), String> {
@@ -693,12 +730,19 @@ fn parse_daemon_error(value: &Value) -> Option<DaemonError> {
 
 fn reject_privileged_broker_socket(socket_path: &str) -> WlResult<()> {
     let trimmed = socket_path.trim_end_matches('/');
-    let is_canonical_broker = trimmed == "/run/d2b/priv.sock";
-    let has_broker_filename = Path::new(trimmed)
-        .file_name()
-        .and_then(|name| name.to_str())
-        == Some("priv.sock");
-    if is_canonical_broker || has_broker_filename {
+    let class = if trimmed == "/run/d2b/public.sock" {
+        SocketClass::PublicDaemon
+    } else if trimmed == "/run/d2b/priv.sock"
+        || Path::new(trimmed)
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some("priv.sock")
+    {
+        SocketClass::PrivilegedBroker
+    } else {
+        SocketClass::Other
+    };
+    if ensure_allowed_socket(class).is_err() {
         return Err(WlError::Config(format!(
             "refusing to connect wlcontrol to privileged d2b broker socket {socket_path}; configure the public socket instead"
         )));
@@ -1236,15 +1280,6 @@ fn runtime_text(value: Option<&Value>) -> Option<String> {
             .and_then(Value::as_str)
             .map(str::to_owned)
     })
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HelloFrame<'a> {
-    #[serde(rename = "type")]
-    type_name: &'a str,
-    client_version: &'a str,
-    supported_features: &'a [&'a str],
 }
 
 #[derive(Debug, Deserialize)]

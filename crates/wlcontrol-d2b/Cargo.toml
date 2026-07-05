@@ -10,6 +10,9 @@ description = "Direct d2bd public-socket client for d2b-wlcontrol."
 
 [dependencies]
 wlcontrol-core.workspace = true
+d2b-client.workspace = true
+d2b-toolkit-core.workspace = true
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

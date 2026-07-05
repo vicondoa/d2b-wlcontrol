@@ -2,27 +2,25 @@
 //!
 //! The public protocol frames every message as a 4-byte little-endian unsigned
 //! length prefix followed by one UTF-8 JSON document, with a 1 MiB cap
-//! (`docs/reference/daemon-api.md`). These helpers are protocol-stable and are
-//! provided by Wave 0 so the Wave 1 protocol-client and test-harness agents
-//! share one framing implementation.
+//! (`docs/reference/daemon-api.md`).
 
+use d2b_client::{read_frame, write_frame, FrameBounds};
+use futures::{executor::block_on, io::Cursor};
 use wlcontrol_core::error::{WlError, WlResult};
 
 /// Maximum accepted frame size (1 MiB), matching the daemon.
-pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub const MAX_FRAME_BYTES: usize = FrameBounds::default_public_daemon().max_len();
 
 /// Encode a JSON payload into a length-prefixed frame.
 pub fn encode_frame(json: &[u8]) -> WlResult<Vec<u8>> {
-    if json.len() > MAX_FRAME_BYTES {
-        return Err(WlError::Protocol(format!(
-            "frame too large: {} > {MAX_FRAME_BYTES}",
-            json.len()
-        )));
-    }
-    let mut frame = Vec::with_capacity(4 + json.len());
-    frame.extend_from_slice(&(json.len() as u32).to_le_bytes());
-    frame.extend_from_slice(json);
-    Ok(frame)
+    let mut frame = Cursor::new(Vec::with_capacity(4 + json.len()));
+    block_on(write_frame(
+        &mut frame,
+        json,
+        FrameBounds::default_public_daemon(),
+    ))
+    .map_err(client_error_to_protocol)?;
+    Ok(frame.into_inner())
 }
 
 /// Decode a length-prefixed frame, returning the JSON payload bytes.
@@ -30,23 +28,26 @@ pub fn encode_frame(json: &[u8]) -> WlResult<Vec<u8>> {
 /// `frame` must contain the 4-byte prefix followed by exactly the declared
 /// number of payload bytes (as delivered by a single `SOCK_SEQPACKET` message).
 pub fn decode_frame(frame: &[u8]) -> WlResult<&[u8]> {
-    if frame.len() < 4 {
-        return Err(WlError::Protocol("frame shorter than length prefix".into()));
-    }
-    let len = u32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]) as usize;
-    if len > MAX_FRAME_BYTES {
+    let mut cursor = Cursor::new(frame.to_vec());
+    let decoded = block_on(read_frame(
+        &mut cursor,
+        FrameBounds::default_public_daemon(),
+    ))
+    .map_err(client_error_to_protocol)?;
+    let consumed = usize::try_from(cursor.position())
+        .map_err(|_| WlError::Protocol("frame cursor position overflow".to_owned()))?;
+    if consumed != frame.len() {
         return Err(WlError::Protocol(format!(
-            "declared frame length {len} exceeds cap {MAX_FRAME_BYTES}"
+            "frame payload length {} does not match declared {}",
+            frame.len().saturating_sub(4),
+            decoded.len()
         )));
     }
-    let payload = &frame[4..];
-    if payload.len() != len {
-        return Err(WlError::Protocol(format!(
-            "frame payload length {} does not match declared {len}",
-            payload.len()
-        )));
-    }
-    Ok(payload)
+    Ok(&frame[4..])
+}
+
+fn client_error_to_protocol(err: d2b_client::ClientError) -> WlError {
+    WlError::Protocol(err.to_string())
 }
 
 #[cfg(test)]

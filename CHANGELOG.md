@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Packaging documentation.** Installation and configuration docs now include
+  exact `d2b-toolkit` flake follow boilerplate for hosts that co-install d2b
+  desktop companions.
+- **Shared toolkit integration.** Public-socket framing, hello negotiation DTOs,
+  broker-socket refusal, Waybar JSON serialization, color validation, and
+  process-argv redaction now use shared d2b toolkit crates without changing the
+  CLI, Waybar, or popup UX.
+- **Portable toolkit input.** The flake now consumes `d2b-toolkit` from a GitHub
+  flake input with `nixpkgs` following the caller instead of a developer-local
+  absolute path.
+
 ### Fixed
 
 - **Audio control visual polish.** The Quickshell popup now renders

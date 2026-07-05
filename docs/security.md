@@ -20,6 +20,14 @@ Authorization is whatever d2bd grants the calling user via
 privilege and enforces no policy of its own beyond hiding controls the
 daemon would reject anyway.
 
+The public-socket frame bounds, hello negotiation shape, broker-socket
+classification, Waybar JSON shape, color parsing, and redacted argv helpers are
+shared with the d2b desktop toolkit. That keeps downstream desktop integrations
+on the same protocol and redaction rules without adding any privileged surface.
+When co-installing with other d2b desktop clients, keep
+`inputs.d2b-wlcontrol.inputs.d2b-toolkit.follows = "d2b-toolkit"` so the
+control center and launcher use the same toolkit revision.
+
 ## Hard rules
 
 - **No broker socket.** Never connects to `/run/d2b/priv.sock`.
