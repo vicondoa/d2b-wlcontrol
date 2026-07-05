@@ -49,7 +49,11 @@ provider reports degraded/unsupported audio enforcement.
 nix run github:vicondoa/d2b-wlcontrol -- status-json
 
 # Or add it as an input and install the package
+#   inputs.d2b-toolkit.url = "github:vicondoa/d2b-toolkit";
+#   inputs.d2b-toolkit.inputs.nixpkgs.follows = "nixpkgs";
 #   inputs.d2b-wlcontrol.url = "github:vicondoa/d2b-wlcontrol";
+#   inputs.d2b-wlcontrol.inputs.nixpkgs.follows = "nixpkgs";
+#   inputs.d2b-wlcontrol.inputs.d2b-toolkit.follows = "d2b-toolkit";
 # then add `d2b-wlcontrol.packages.${system}.default` to your packages.
 ```
 
@@ -90,6 +94,10 @@ Configuration is TOML at
 defaults are sane; common overrides are the detached guest terminal command and
 observability URL.
 See [docs/configuration.md](./docs/configuration.md).
+
+The flake follows the shared d2b toolkit input for public-socket framing,
+Waybar JSON, color parsing, and broker-socket refusal. Keep the toolkit follow
+line when pinning `d2b`, `d2b-wlterm`, and `d2b-wlcontrol` together.
 
 ## Documentation
 

@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Packaging documentation.** Installation and configuration docs now include
+  exact `d2b-toolkit` flake follow boilerplate for hosts that co-install d2b
+  desktop companions.
 - **Shared toolkit integration.** Public-socket framing, hello negotiation DTOs,
   broker-socket refusal, Waybar JSON serialization, color validation, and
   process-argv redaction now use shared d2b toolkit crates without changing the
