@@ -283,6 +283,7 @@ mod tests {
     fn vm(name: &str, state: RuntimeState, net: bool) -> Vm {
         Vm {
             name: name.into(),
+            canonical_target: None,
             env: Some("work".into()),
             state,
             is_net_vm: net,

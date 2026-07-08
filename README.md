@@ -12,6 +12,11 @@ without ever touching anything privileged. It talks only to the d2bd
 **public** socket and, where it is the better boundary, the official `d2b`
 CLI.
 
+The reduced VM model includes d2b-provided canonical realm targets when the
+daemon exposes them, and falls back to `<vm>.local.d2b` for local VMs during the
+realm-native transition. UI code should treat that field as trusted d2b
+identity and keep guest app ids/titles as presentation hints only.
+
 > Status: the Waybar indicator, the live d2bd public-socket client,
 > the reduced status model, auth-gated action planning, Quickshell
 > layer-shell popup, d2b audio controls, and shared toolkit-backed
