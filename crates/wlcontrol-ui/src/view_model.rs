@@ -224,6 +224,7 @@ mod tests {
     fn vm(name: &str, env: Option<&str>, state: RuntimeState) -> Vm {
         Vm {
             name: name.to_owned(),
+            canonical_target: None,
             env: env.map(str::to_owned),
             state,
             is_net_vm: false,

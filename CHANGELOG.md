@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Realm-aware VM identity.** The reduced VM model now carries d2b-provided
+  canonical realm targets when available and falls back to `<vm>.local.d2b` for
+  local VMs, so desktop surfaces can distinguish trusted d2b identity from
+  guest-provided app ids/titles.
 - **Packaging documentation.** Installation and configuration docs now include
   exact `d2b-toolkit` flake follow boilerplate for hosts that co-install d2b
   desktop companions.

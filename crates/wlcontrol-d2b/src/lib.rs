@@ -754,6 +754,7 @@ fn inventory_vm_from_value(value: &Value) -> Option<InventoryVm> {
     let name = string_field(value, &["name", "vm"])?;
     Some(InventoryVm {
         name,
+        canonical_target: canonical_target_from_value(value),
         env: string_field(value, &["env"]),
         is_net_vm: bool_field(value, &["isNetVm", "is_net_vm"]).unwrap_or(false),
         features: features_from_value(value),
@@ -874,16 +875,51 @@ fn status_snapshot_from_entry(
         .unwrap_or_default();
     let state = state_from_status(candidate);
     let static_ip = string_field(candidate, &["staticIp", "static_ip"]);
+    let canonical_target = canonical_target_from_value(candidate);
 
     Some(StatusSnapshot {
         status: VmStatus {
             name,
+            canonical_target,
             state,
             pending_restart,
             readiness,
             capabilities: capabilities_from_value(candidate),
         },
         static_ip,
+    })
+}
+
+fn canonical_target_from_value(value: &Value) -> Option<String> {
+    string_field(
+        value,
+        &[
+            "canonicalTarget",
+            "canonical_target",
+            "realmTarget",
+            "realm_target",
+            "target",
+        ],
+    )
+    .or_else(|| {
+        value.get("identity").and_then(|identity| {
+            string_field(
+                identity,
+                &[
+                    "canonicalTarget",
+                    "canonical_target",
+                    "realmTarget",
+                    "realm_target",
+                ],
+            )
+        })
+    })
+    .or_else(|| {
+        value.get("realm").and_then(|realm| {
+            let workload = string_field(value, &["name", "vm", "workload", "workloadId"])?;
+            let realm_path = string_field(realm, &["path", "targetForm", "target_form", "name"])?;
+            Some(format!("{workload}.{realm_path}.d2b"))
+        })
     })
 }
 

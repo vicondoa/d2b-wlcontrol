@@ -105,6 +105,10 @@ fn build_vm(
 
     let state = reduce_state(coarse, status.map(|s| s.state));
     let capabilities = merge_capabilities(inv.capabilities, status.map(|s| s.capabilities));
+    let canonical_target = status
+        .and_then(|s| s.canonical_target.clone())
+        .or_else(|| inv.canonical_target.clone())
+        .or_else(|| canonical_local_target(&inv.name));
 
     let usb = usb_claims
         .iter()
@@ -125,6 +129,7 @@ fn build_vm(
 
     Vm {
         name: inv.name,
+        canonical_target,
         env: inv.env,
         state,
         is_net_vm,
@@ -138,6 +143,20 @@ fn build_vm(
         audio: audio_state,
         quick_launch,
     }
+}
+
+fn canonical_local_target(vm: &str) -> Option<String> {
+    if is_canonical_vm_label(vm) {
+        Some(format!("{vm}.local.d2b"))
+    } else {
+        None
+    }
+}
+
+fn is_canonical_vm_label(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn audio_state_for(vm: &str, audio: &AudioStatus) -> Option<VmAudioState> {
@@ -233,6 +252,7 @@ mod tests {
     fn inventory_vm(name: &str, coarse_status: Option<&str>) -> InventoryVm {
         InventoryVm {
             name: name.into(),
+            canonical_target: None,
             env: Some("work".into()),
             is_net_vm: false,
             features: Default::default(),
@@ -240,6 +260,55 @@ mod tests {
             static_ip: None,
             coarse_status: coarse_status.map(String::from),
         }
+    }
+
+    #[test]
+    fn reducer_prefers_d2b_canonical_target_and_falls_back_to_local_realm() {
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![
+                    inventory_vm("work", Some("running")),
+                    InventoryVm {
+                        canonical_target: Some("builder.dev.d2b".to_string()),
+                        ..inventory_vm("builder", Some("running"))
+                    },
+                ],
+            }),
+            statuses: vec![VmStatus {
+                name: "work".into(),
+                canonical_target: Some("work.corp.d2b".to_string()),
+                state: RuntimeState::Running,
+                pending_restart: false,
+                readiness: Vec::new(),
+                capabilities: Default::default(),
+            }],
+            ..Default::default()
+        };
+
+        let state = reduce(input);
+        let work = state.vms.iter().find(|vm| vm.name == "work").unwrap();
+        let builder = state.vms.iter().find(|vm| vm.name == "builder").unwrap();
+        assert_eq!(work.canonical_target.as_deref(), Some("work.corp.d2b"));
+        assert_eq!(builder.canonical_target.as_deref(), Some("builder.dev.d2b"));
+
+        let fallback = reduce(ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Admin,
+            }),
+            inventory: Some(Inventory {
+                vms: vec![inventory_vm("personal-dev", Some("running"))],
+            }),
+            ..Default::default()
+        });
+        assert_eq!(
+            fallback.vms[0].canonical_target.as_deref(),
+            Some("personal-dev.local.d2b")
+        );
     }
 
     #[test]
@@ -266,6 +335,7 @@ mod tests {
             }),
             statuses: vec![VmStatus {
                 name: "corp-vm".into(),
+                canonical_target: None,
                 state: RuntimeState::Running,
                 pending_restart: true,
                 readiness: vec!["api-ready".into()],
@@ -487,6 +557,7 @@ mod tests {
             }),
             statuses: vec![VmStatus {
                 name: "corp-vm".into(),
+                canonical_target: None,
                 state: RuntimeState::Running,
                 pending_restart: false,
                 readiness: vec![],
@@ -511,6 +582,7 @@ mod tests {
             }),
             statuses: vec![VmStatus {
                 name: "corp-vm".into(),
+                canonical_target: None,
                 state: RuntimeState::Running,
                 pending_restart: true,
                 readiness: vec![],

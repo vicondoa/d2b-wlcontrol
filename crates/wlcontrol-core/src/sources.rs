@@ -20,6 +20,8 @@ use crate::model::{
 pub struct InventoryVm {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<String>,
     #[serde(default)]
     pub is_net_vm: bool,
@@ -47,6 +49,8 @@ pub struct Inventory {
 #[serde(rename_all = "camelCase")]
 pub struct VmStatus {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_target: Option<String>,
     pub state: RuntimeState,
     #[serde(default)]
     pub pending_restart: bool,

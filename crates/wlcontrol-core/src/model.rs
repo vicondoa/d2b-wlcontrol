@@ -181,6 +181,13 @@ pub struct QuickLaunchIcon {
 pub struct Vm {
     /// VM name as declared in `d2b.vms.<name>`.
     pub name: String,
+    /// Canonical realm target asserted by d2b, when known.
+    ///
+    /// Local VMs default to `<vm>.local.d2b` during the realm-native
+    /// transition. UI surfaces should prefer this for trusted VM identity and
+    /// keep guest app ids/titles as presentation metadata only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_target: Option<String>,
     /// Environment name, if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<String>,
@@ -474,6 +481,7 @@ mod tests {
             vms: vec![
                 Vm {
                     name: "corp-vm".into(),
+                    canonical_target: None,
                     env: Some("work".into()),
                     state: RuntimeState::Running,
                     is_net_vm: false,
@@ -489,6 +497,7 @@ mod tests {
                 },
                 Vm {
                     name: "sys-work-net".into(),
+                    canonical_target: None,
                     env: Some("work".into()),
                     state: RuntimeState::Running,
                     is_net_vm: true,
@@ -519,6 +528,7 @@ mod tests {
         };
         state.vms.push(Vm {
             name: "corp-vm".into(),
+            canonical_target: None,
             env: None,
             state: RuntimeState::Running,
             is_net_vm: false,
@@ -569,6 +579,7 @@ mod tests {
             role: AuthRole::Admin,
             vms: vec![Vm {
                 name: "noisy-vm".into(),
+                canonical_target: None,
                 env: None,
                 state: RuntimeState::Unknown,
                 is_net_vm: false,
