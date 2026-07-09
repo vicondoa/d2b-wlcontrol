@@ -164,6 +164,9 @@ pub fn build_realm_groups(
 
 fn resolve_realm_color(realm_name: &str, ui_colors: Option<&UiColorArtifact>) -> String {
     if let Some(colors) = ui_colors {
+        if let Some(realm_color) = colors.realms.get(realm_name) {
+            return realm_color.accent.clone();
+        }
         if let Some(env_color) = colors.envs.get(realm_name) {
             return env_color.accent.clone();
         }
@@ -211,7 +214,7 @@ fn build_entries_with_collisions(workloads: Vec<LauncherWorkload>) -> Vec<RealmL
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{UiColorEnv, UiColorHost, UiColorStates};
+    use crate::config::{UiColorEnv, UiColorHost, UiColorRealm, UiColorStates};
     use std::collections::BTreeMap;
 
     fn workload(
@@ -254,8 +257,25 @@ mod tests {
                 unknown: "#6c7086".to_owned(),
             },
             envs,
+            realms: BTreeMap::new(),
             vms: BTreeMap::new(),
         }
+    }
+
+    fn ui_colors_with_realm_and_env(
+        realm: &str,
+        realm_accent: &str,
+        env_accent: &str,
+    ) -> UiColorArtifact {
+        let mut colors = ui_colors_with_env(realm, env_accent);
+        colors.realms.insert(
+            realm.to_owned(),
+            UiColorRealm {
+                accent: realm_accent.to_owned(),
+                path: realm.to_owned(),
+            },
+        );
+        colors
     }
 
     #[test]
@@ -284,6 +304,14 @@ mod tests {
         let colors = ui_colors_with_env("work", "#ff8000");
         let groups = build_realm_groups(wls, Some(&colors));
         assert_eq!(groups[0].realm_color, "#ff8000");
+    }
+
+    #[test]
+    fn prefers_realm_accent_color_from_ui_colors() {
+        let wls = vec![workload("work", "work", "browser", "web")];
+        let colors = ui_colors_with_realm_and_env("work", "#ffb347", "#ffa500");
+        let groups = build_realm_groups(wls, Some(&colors));
+        assert_eq!(groups[0].realm_color, "#ffb347");
     }
 
     #[test]

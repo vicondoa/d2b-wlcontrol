@@ -77,6 +77,8 @@ pub struct UiColorArtifact {
     pub host: UiColorHost,
     pub states: UiColorStates,
     pub envs: BTreeMap<String, UiColorEnv>,
+    #[serde(default)]
+    pub realms: BTreeMap<String, UiColorRealm>,
     pub vms: BTreeMap<String, UiColorVm>,
 }
 
@@ -99,6 +101,12 @@ pub struct UiColorStates {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UiColorEnv {
     pub accent: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiColorRealm {
+    pub accent: String,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
