@@ -36,6 +36,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - **Realm color source.** Realm launcher cards now prefer first-class
   `ui-colors.json` realm accents over transition env accents so colors match
   Waybar, wlterm, clip-picker, and Wayland rails.
+- **Chooser frame.** Duplicate launcher chooser cards now use a stronger
+  realm-colored outer border and subtle realm-tinted background.
 - **Realm-aware VM identity.** The reduced VM model now carries d2b-provided
   canonical realm targets when available and falls back to `<vm>.local.d2b` for
   local VMs, so desktop surfaces can distinguish trusted d2b identity from
