@@ -357,7 +357,7 @@ ShellRoot {
 
   function realmLaunchTooltip(group, entry) {
     const target = entry.canonicalTarget || (entry.workloadName + "." + group.realmName + ".d2b")
-    if (entry.hasIconCollision) return "Choose a " + entry.icon + " workload in " + group.realmName
+    if (entry.hasIconCollision) return "Choose workload in " + group.realmName
     return "Launch " + entry.label + " (" + target + ")"
   }
 
@@ -370,7 +370,7 @@ ShellRoot {
   function launchRealmEntry(group, entry) {
     if (entry.hasIconCollision) {
       realmChooserEntries = matchingRealmEntries(group, entry)
-      realmChooserTitle = "Choose " + entry.icon + " in " + group.realmName
+      realmChooserTitle = "Choose workload in " + group.realmName
       realmChooserColor = group.realmColor || root.hostAccentColor()
       realmChooserRealmId = group.realmId || group.realmName
       hoverHint = realmChooserTitle
@@ -1658,6 +1658,8 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("function realmGroups()"));
         assert!(QML_SOURCE.contains("model: root.realmGroups()"));
         assert!(QML_SOURCE.contains("function launchRealmEntry(group, entry)"));
+        assert!(QML_SOURCE.contains("Choose workload in "));
+        assert!(!QML_SOURCE.contains("Choose \" + entry.icon"));
         assert!(QML_SOURCE.contains("[\"realm-workload-launch\", group.realmId || group.realmName, entry.actionId, entry.workloadName]"));
         assert!(QML_SOURCE.contains("root.realmChooserEntries"));
         assert!(QML_SOURCE.contains("root.launchChosenRealmEntry(modelData)"));

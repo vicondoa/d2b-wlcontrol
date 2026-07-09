@@ -30,6 +30,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Chooser wording.** Duplicate launcher disambiguation now says
+  `Choose workload in <realm>` instead of exposing icon names such as
+  `language`.
 - **Realm-aware VM identity.** The reduced VM model now carries d2b-provided
   canonical realm targets when available and falls back to `<vm>.local.d2b` for
   local VMs, so desktop surfaces can distinguish trusted d2b identity from
