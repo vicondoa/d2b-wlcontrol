@@ -20,7 +20,9 @@ use clap::{Parser, Subcommand};
 use d2b_toolkit_core::Redacted;
 use serde::Serialize;
 use wlcontrol_core::model::{ActionKind, Connectivity, Unavailable};
-use wlcontrol_core::{plan, reduce, Config, PlannedAction, WlState};
+use wlcontrol_core::{
+    plan, reduce, Config, LauncherWorkload, PlannedAction, UiColorArtifact, WlState,
+};
 use wlcontrol_d2b::D2bClient;
 use wlcontrol_waybar::DisplayMode;
 
@@ -200,7 +202,28 @@ fn run(cli: Cli) -> wlcontrol_core::WlResult<ExitCode> {
 /// Build the current reduced state from one refresh cycle.
 fn current_state(config: &Config) -> WlState {
     let client = D2bClient::new(config);
-    reduce::reduce_with_config(client.refresh(), config)
+    let (ui_colors, launcher_workloads) = launcher_context(config);
+    reduce::reduce_with_realm_groups(
+        client.refresh(),
+        config,
+        ui_colors.as_ref(),
+        launcher_workloads,
+    )
+}
+
+fn launcher_context(config: &Config) -> (Option<UiColorArtifact>, Vec<LauncherWorkload>) {
+    let ui_colors = config.load_ui_colors().unwrap_or_else(|err| {
+        eprintln!("d2b-wlcontrol: failed to load UI colors: {err}");
+        None
+    });
+    let launcher_workloads = config
+        .load_launcher_metadata()
+        .unwrap_or_else(|err| {
+            eprintln!("d2b-wlcontrol: failed to load launcher metadata: {err}");
+            None
+        })
+        .unwrap_or_default();
+    (ui_colors, launcher_workloads)
 }
 
 fn run_status_json(config: &Config) -> wlcontrol_core::WlResult<ExitCode> {
@@ -739,6 +762,10 @@ mod tests {
             .join("state-file")
     }
 
+    fn test_artifact_file(name: &str) -> PathBuf {
+        test_state_file(name).with_file_name("realm-workloads-launcher.json")
+    }
+
     fn cleanup_state_file(path: &Path) {
         if let Some(parent) = path.parent() {
             let _ = fs::remove_dir_all(parent);
@@ -781,6 +808,41 @@ mod tests {
     fn missing_display_mode_file_defaults_to_compact() {
         let path = test_state_file("missing-display-mode");
         assert_eq!(read_display_mode_at(&path), DisplayMode::Compact);
+        cleanup_state_file(&path);
+    }
+
+    #[test]
+    fn launcher_context_loads_configured_realm_metadata() {
+        let path = test_artifact_file("launcher-context-loads-metadata");
+        fs::create_dir_all(path.parent().expect("artifact has parent")).expect("create parent");
+        fs::write(
+            &path,
+            r##"{
+              "schemaVersion": "v1",
+              "workloads": [
+                {
+                  "realmName": "work",
+                  "realmId": "work",
+                  "workloadName": "aad",
+                  "actionId": "terminal.work.aad",
+                  "label": "Work AAD",
+                  "icon": "terminal",
+                  "canonicalTarget": "aad.work.d2b",
+                  "legacyVmName": "work-aad"
+                }
+              ]
+            }"##,
+        )
+        .expect("write launcher artifact");
+
+        let config = Config {
+            launcher_metadata_path: path.display().to_string(),
+            ..Config::default()
+        };
+
+        let (_colors, workloads) = launcher_context(&config);
+        assert_eq!(workloads.len(), 1);
+        assert_eq!(workloads[0].canonical_target, "aad.work.d2b");
         cleanup_state_file(&path);
     }
 
