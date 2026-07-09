@@ -175,6 +175,60 @@ pub struct QuickLaunchIcon {
     pub tooltip: String,
 }
 
+/// A single workload launcher entry within a [`RealmGroup`].
+///
+/// One entry corresponds to one row in `realm-workloads-launcher.json`.
+/// When `has_icon_collision` is true, multiple workloads in the same realm
+/// share the same icon; the UI must open a chooser rather than launching
+/// the workload directly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealmLauncherEntry {
+    /// Stable action ID from `realm-workloads-launcher.json`.
+    pub action_id: String,
+    /// Workload name within the realm.
+    pub workload_name: String,
+    /// Display label.
+    pub label: String,
+    /// XDG icon name.
+    pub icon: String,
+    /// Canonical target address for this workload.
+    pub canonical_target: String,
+    /// Legacy d2b VM name backing this workload, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_vm_name: Option<String>,
+    /// True when another workload in the same realm shares this icon.
+    ///
+    /// The UI layer must show a chooser rather than launching directly.
+    #[serde(default)]
+    pub has_icon_collision: bool,
+    /// action_ids of all workloads in the same realm sharing the same icon.
+    /// Empty when `has_icon_collision` is false.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icon_siblings: Vec<String>,
+}
+
+/// A realm group in the quick-launch surface.
+///
+/// The outer/group border color is `realm_color`; workload inner borders use
+/// default or theme styling unless explicitly overridden.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealmGroup {
+    /// Realm name as declared in `d2b.realms.<name>`.
+    pub realm_name: String,
+    /// Stable realm ID.
+    pub realm_id: String,
+    /// Resolved accent color for the outer group border (`#rrggbb`).
+    ///
+    /// Sourced from `ui-colors.json` envs accent when the realm name matches
+    /// a declared env; otherwise derived from the realm name using the d2b
+    /// color palette hash.
+    pub realm_color: String,
+    /// Workload entries within this realm, in declaration order.
+    pub workloads: Vec<RealmLauncherEntry>,
+}
+
 /// A normalized VM as presented to the UI surfaces.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -250,6 +304,13 @@ pub struct WlState {
     /// All known VMs (including net VMs and hidden ones); renderers use
     /// `is_net_vm` / `hidden` to choose compact vs. detail surfaces.
     pub vms: Vec<Vm>,
+    /// Realm groups populated from `realm-workloads-launcher.json`.
+    ///
+    /// Each group carries a realm-scoped accent color for the outer border;
+    /// inner workload borders use theme/default styling. Empty when the
+    /// launcher metadata artifact is absent or empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub realm_groups: Vec<RealmGroup>,
     /// True when this state was served from cache after a failed refresh.
     #[serde(default)]
     pub stale: bool,
@@ -341,6 +402,18 @@ pub enum ActionKind {
     OpenObservability,
     /// Cycle the Waybar compact/detail display mode.
     CycleDisplay,
+    /// Launch a realm workload by realm_id and action_id.
+    ///
+    /// Maps to `d2b realm workload launch <action_id>` or an equivalent
+    /// public-socket request. When `has_icon_collision` was set on the
+    /// corresponding [`RealmLauncherEntry`], the UI must first open a
+    /// chooser; this action represents the confirmed single-workload choice.
+    RealmWorkloadLaunch {
+        realm_id: String,
+        action_id: String,
+        /// Workload name, carried for display/audit purposes.
+        workload_name: String,
+    },
 }
 
 /// Why an action is or is not currently available.
@@ -514,6 +587,7 @@ mod tests {
             ],
             stale: false,
             note: None,
+            ..Default::default()
         };
         assert_eq!(state.running_count(), 1);
         assert_eq!(state.visible_count(), 1);
@@ -595,6 +669,7 @@ mod tests {
             }],
             stale: false,
             note: None,
+            ..Default::default()
         };
         assert_eq!(state.running_count(), 0);
         assert_eq!(state.visible_count(), 0);

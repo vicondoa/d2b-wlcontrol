@@ -8,6 +8,7 @@ pub mod config;
 pub mod error;
 pub mod model;
 pub mod plan;
+pub mod realm_launcher;
 pub mod reduce;
 pub mod sources;
 
@@ -17,6 +18,7 @@ pub use config::{
 };
 pub use error::{WlError, WlResult};
 pub use model::{
-    ActionAvailability, ActionKind, AuthRole, Connectivity, PlannedAction, RuntimeState,
-    SocketIntent, Unavailable, UsbClaim, Vm, VmFeatures, WlState,
+    ActionAvailability, ActionKind, AuthRole, Connectivity, PlannedAction, RealmGroup,
+    RealmLauncherEntry, RuntimeState, SocketIntent, Unavailable, UsbClaim, Vm, VmFeatures, WlState,
 };
+pub use realm_launcher::{build_realm_groups, load_launcher_artifact, LauncherWorkload};

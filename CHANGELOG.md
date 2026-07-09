@@ -6,6 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Realm-grouped quick-launch panel.** The wlcontrol panel now groups
+  workload launcher buttons by realm. Each group's outer/group border uses
+  the realm's accent color sourced from `ui-colors.json` (env accent for
+  the matching realm name) or the d2b palette hash. Inner workload borders
+  use default/theme styling. When multiple workloads in the same realm
+  share the same icon, the button is annotated as a chooser entry so the
+  UI can present a disambiguation dialog.
+- **`realm-workloads-launcher.json` consumption.** The reducer now reads
+  d2b's generated launcher metadata artifact and populates
+  `WlState::realm_groups` with typed `RealmGroup` / `RealmLauncherEntry`
+  models. The path defaults to `/etc/d2b/realm-workloads-launcher.json`
+  and can be overridden via `launcher_metadata_path` in config.
+- **`RealmWorkloadLaunch` action.** A new `ActionKind::RealmWorkloadLaunch`
+  dispatches `d2b realm workload launch --realm <id> <action_id>` for
+  realm-native workload activation. Requires launcher role.
+- **Waybar tooltip realm section.** When realm groups are present, the
+  Waybar tooltip includes a `— realm launchers —` section listing each
+  realm's icon buttons grouped by realm color, with icon-collision entries
+  annotated with `↕N` (chooser required).
+
 ### Changed
 
 - **Realm-aware VM identity.** The reduced VM model now carries d2b-provided

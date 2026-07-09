@@ -19,8 +19,9 @@ use std::collections::HashSet;
 use crate::config::Config;
 use crate::model::{
     AudioChannelState, AudioEnforcementPosture, AudioProviderKind, AuthRole, Connectivity,
-    QuickLaunchIcon, RuntimeState, UsbClaim, Vm, VmAudioState, VmCapabilities, WlState,
+    QuickLaunchIcon, RealmGroup, RuntimeState, UsbClaim, Vm, VmAudioState, VmCapabilities, WlState,
 };
+use crate::realm_launcher::{build_realm_groups, LauncherWorkload};
 use crate::sources::{AudioStatus, InventoryVm, ReduceInput, VmStatus};
 
 /// Reduce a bundle of source fragments into the aggregate [`WlState`].
@@ -29,7 +30,24 @@ pub fn reduce(input: ReduceInput) -> WlState {
 }
 
 /// Reduce source fragments with user configuration for ordering and visibility.
+///
+/// Realm groups are not populated here. Use [`reduce_with_realm_groups`] when
+/// pre-loaded launcher metadata is available.
 pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
+    reduce_with_realm_groups(input, config, None, Vec::new())
+}
+
+/// Reduce source fragments, attaching pre-loaded realm groups to the output.
+///
+/// `ui_colors` is used by [`build_realm_groups`] to resolve realm accent
+/// colors.  `launcher_workloads` comes from
+/// [`Config::load_launcher_metadata`].
+pub fn reduce_with_realm_groups(
+    input: ReduceInput,
+    config: &Config,
+    ui_colors: Option<&crate::config::UiColorArtifact>,
+    launcher_workloads: Vec<LauncherWorkload>,
+) -> WlState {
     let ReduceInput {
         connectivity,
         auth,
@@ -44,6 +62,7 @@ pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
             connectivity,
             role: AuthRole::None,
             vms: Vec::new(),
+            realm_groups: Vec::new(),
             stale: false,
             note: None,
         };
@@ -80,10 +99,13 @@ pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
         })
         .collect();
 
+    let realm_groups: Vec<RealmGroup> = build_realm_groups(launcher_workloads, ui_colors);
+
     WlState {
         connectivity,
         role,
         vms,
+        realm_groups,
         stale: false,
         note: None,
     }

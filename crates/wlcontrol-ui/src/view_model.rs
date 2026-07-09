@@ -1,11 +1,26 @@
 use wlcontrol_core::model::{
-    ActionKind, AuthRole, Connectivity, RuntimeState, Unavailable, UsbClaim, Vm, WlState,
+    ActionKind, AuthRole, Connectivity, RealmGroup, RealmLauncherEntry, RuntimeState, Unavailable,
+    UsbClaim, Vm, WlState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VmGroup {
     pub(crate) env: String,
     pub(crate) vms: Vec<Vm>,
+}
+
+/// A realm group prepared for rendering in the quick-launch panel.
+///
+/// The outer/group border color is `realm_color` (sourced from `RealmGroup`).
+/// Inner workload borders use default/theme styling unless overridden.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RealmQuickLaunchGroup {
+    pub(crate) realm_name: String,
+    pub(crate) realm_id: String,
+    /// Resolved `#rrggbb` accent for the outer group border.
+    pub(crate) realm_color: String,
+    /// Workload entries within this realm, ready for button rendering.
+    pub(crate) entries: Vec<RealmLauncherEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +49,25 @@ pub(crate) fn visible_vm_groups(state: &WlState, show_internal: bool) -> Vec<VmG
     }
 
     groups
+}
+
+/// Return realm quick-launch groups for the wlcontrol panel.
+///
+/// Groups come from `state.realm_groups` which is populated by the reducer
+/// when `Config::launcher_metadata_path` resolves a valid artifact.
+/// Returns an empty vec when no realm launcher metadata is available.
+pub(crate) fn visible_realm_quick_launch_groups(state: &WlState) -> Vec<RealmQuickLaunchGroup> {
+    state
+        .realm_groups
+        .iter()
+        .filter(|g| !g.workloads.is_empty())
+        .map(|g: &RealmGroup| RealmQuickLaunchGroup {
+            realm_name: g.realm_name.clone(),
+            realm_id: g.realm_id.clone(),
+            realm_color: g.realm_color.clone(),
+            entries: g.workloads.clone(),
+        })
+        .collect()
 }
 
 pub(crate) fn state_badge(state: RuntimeState) -> BadgeSpec {
@@ -101,6 +135,11 @@ pub(crate) fn action_label(action: &ActionKind) -> String {
         ActionKind::OpenControlCenter => "Open control center".to_owned(),
         ActionKind::OpenObservability => "Open observability".to_owned(),
         ActionKind::CycleDisplay => "Cycle display".to_owned(),
+        ActionKind::RealmWorkloadLaunch {
+            realm_id,
+            workload_name,
+            ..
+        } => format!("Launch {workload_name} ({realm_id})"),
     }
 }
 
@@ -142,7 +181,8 @@ pub(crate) fn action_vm_name(action: &ActionKind) -> Option<&str> {
         ActionKind::Refresh
         | ActionKind::OpenControlCenter
         | ActionKind::OpenObservability
-        | ActionKind::CycleDisplay => None,
+        | ActionKind::CycleDisplay
+        | ActionKind::RealmWorkloadLaunch { .. } => None,
     }
 }
 
@@ -257,6 +297,7 @@ mod tests {
             ],
             stale: false,
             note: None,
+            ..Default::default()
         };
 
         let groups = visible_vm_groups(&state, false);
@@ -466,5 +507,75 @@ mod tests {
         assert!(subtitle.contains("api-ready"));
         assert!(subtitle.contains("USB 1-2 bound to corp-vm"));
         assert!(subtitle.contains("pending restart"));
+    }
+
+    #[test]
+    fn visible_realm_quick_launch_groups_returns_groups_from_state() {
+        use wlcontrol_core::model::{RealmGroup, RealmLauncherEntry};
+
+        let entry = RealmLauncherEntry {
+            action_id: "corp-browser".to_owned(),
+            workload_name: "corp-browser".to_owned(),
+            label: "Corp Browser".to_owned(),
+            icon: "web".to_owned(),
+            canonical_target: "corp-browser.work.d2b".to_owned(),
+            legacy_vm_name: Some("corp-browser".to_owned()),
+            has_icon_collision: false,
+            icon_siblings: vec![],
+        };
+        let state = WlState {
+            realm_groups: vec![RealmGroup {
+                realm_name: "work".to_owned(),
+                realm_id: "work".to_owned(),
+                realm_color: "#90d090".to_owned(),
+                workloads: vec![entry.clone()],
+            }],
+            ..Default::default()
+        };
+
+        let groups = visible_realm_quick_launch_groups(&state);
+        assert_eq!(groups.len(), 1);
+        let g = &groups[0];
+        assert_eq!(g.realm_name, "work");
+        assert_eq!(g.realm_color, "#90d090");
+        assert_eq!(g.entries.len(), 1);
+        assert_eq!(g.entries[0].action_id, "corp-browser");
+        assert!(!g.entries[0].has_icon_collision);
+    }
+
+    #[test]
+    fn visible_realm_quick_launch_groups_skips_empty_groups() {
+        use wlcontrol_core::model::RealmGroup;
+
+        let state = WlState {
+            realm_groups: vec![RealmGroup {
+                realm_name: "work".to_owned(),
+                realm_id: "work".to_owned(),
+                realm_color: "#90d090".to_owned(),
+                workloads: vec![],
+            }],
+            ..Default::default()
+        };
+        let groups = visible_realm_quick_launch_groups(&state);
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn realm_workload_launch_action_label_is_human_readable() {
+        let label = action_label(&ActionKind::RealmWorkloadLaunch {
+            realm_id: "work".to_owned(),
+            action_id: "corp-browser".to_owned(),
+            workload_name: "corp-browser".to_owned(),
+        });
+        assert!(label.contains("corp-browser"), "label: {label}");
+        assert!(label.contains("work"), "label: {label}");
+        assert_eq!(
+            action_vm_name(&ActionKind::RealmWorkloadLaunch {
+                realm_id: "work".to_owned(),
+                action_id: "corp-browser".to_owned(),
+                workload_name: "corp-browser".to_owned(),
+            }),
+            None
+        );
     }
 }
