@@ -1028,24 +1028,6 @@ ShellRoot {
                         }
                       }
 
-                      Flow {
-                        visible: !root.isRealmCollapsed(realmCard.group)
-                        height: visible ? implicitHeight : 0
-                        width: parent.width
-                        spacing: 6
-                        Repeater {
-                          model: modelData.workloads || []
-                          ControlChip {
-                            icon: modelData.icon
-                            label: modelData.label
-                            tooltip: root.realmLaunchTooltip(realmCard.group, modelData)
-                            accent: root.shellColor("muted", "#9399b2")
-                            enabled: root.canMutate()
-                            onClicked: root.launchRealmEntry(realmCard.group, modelData)
-                          }
-                        }
-                      }
-
                       Column {
                         visible: !root.isRealmCollapsed(realmCard.group)
                         height: visible ? implicitHeight : 0
@@ -1054,52 +1036,194 @@ ShellRoot {
                         Repeater {
                           model: root.vmsForRealm(realmCard.group)
                           Rectangle {
-                            width: parent.width
-                            height: 40
-                            radius: 10
-                            color: root.shellColor("input_background", "#0d0d0d")
-                            border.color: root.shellColor("border", "#2a2d35")
-                            border.width: 1
-                            property var vm: modelData
+                          id: realmVmCard
+                          width: parent.width
+                          height: realmVmContent.implicitHeight + 14
+                          radius: 10
+                          color: root.shellColor("input_background", "#0d0d0d")
+                          border.color: root.shellColor("border", "#2a2d35")
+                          border.width: 1
+                          property var vm: modelData
+                          property bool expanded: false
+                          property bool usbEntryVisible: false
+                          property string usbEntryText: ""
+
+                          Column {
+                            id: realmVmContent
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 7
+                            spacing: 6
+
+                            Item {
+                              width: parent.width
+                              height: 30
+                              MouseArea {
+                                anchors.fill: parent
+                                z: -1
+                                onClicked: realmVmCard.expanded = !realmVmCard.expanded
+                              }
+                              Row {
+                                anchors.fill: parent
+                                spacing: 8
+                                Text {
+                                  width: 20
+                                  anchors.verticalCenter: parent.verticalCenter
+                                  color: root.vmDotColor(vm)
+                                  font.pixelSize: 15
+                                  horizontalAlignment: Text.AlignHCenter
+                                  text: root.vmGlyph(vm)
+                                }
+                                Column {
+                                  width: parent.width - compactActions.implicitWidth - 34
+                                  anchors.verticalCenter: parent.verticalCenter
+                                  spacing: 1
+                                  Text {
+                                    width: parent.width
+                                    color: root.shellColor("foreground_strong", "#ffffff")
+                                    font.pixelSize: 13
+                                    font.bold: true
+                                    elide: Text.ElideRight
+                                    text: vm.name
+                                  }
+                                  Text {
+                                    width: parent.width
+                                    color: root.shellColor("muted", "#9399b2")
+                                    font.pixelSize: 10
+                                    elide: Text.ElideRight
+                                    text: root.workloadVmMeta(vm)
+                                  }
+                                }
+                                Row {
+                                  id: compactActions
+                                  spacing: 5
+                                  anchors.verticalCenter: parent.verticalCenter
+                                  IconButton {
+                                    text: vm.state === "running" ? "stop" : "play_arrow"
+                                    tooltip: enabled ? ((vm.state === "running" ? "Gracefully stop " : "Start ") + vm.name) : root.disabledReason(vm, "admin", vm.state === "running" ? "stop" : "start")
+                                    accent: vm.state === "running" ? root.stateColor("transitioning") : root.stateColor("running")
+                                    enabled: vm.state === "running" ? root.canStop(vm) : root.canStart(vm)
+                                    prominent: true
+                                    onClicked: {
+                                      if (vm.state === "running") root.confirmAction("stop:" + vm.name, "Click again to gracefully stop " + vm.name, ["stop", vm.name])
+                                      else root.action(["start", vm.name])
+                                    }
+                                  }
+                                  IconButton {
+                                    text: "terminal"
+                                    tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin", "terminal")
+                                    accent: root.shellColor("foreground_strong", "#ffffff")
+                                    enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"
+                                    onClicked: root.action(["terminal", vm.name])
+                                  }
+                                  Repeater {
+                                    model: vm.quickLaunch || []
+                                    IconButton {
+                                      text: modelData.icon
+                                      tooltip: enabled ? modelData.tooltip : root.disabledReason(vm, "admin", "terminal")
+                                      accent: root.shellColor("foreground_strong", "#ffffff")
+                                      enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"
+                                      onClicked: root.action(["quick-launch", vm.name, modelData.id])
+                                    }
+                                  }
+                                  IconButton {
+                                    text: realmVmCard.expanded ? "expand_less" : "more_horiz"
+                                    tooltip: realmVmCard.expanded ? "Hide controls" : "More controls"
+                                    accent: root.shellColor("foreground_strong", "#ffffff")
+                                    enabled: root.state.connectivity === "connected"
+                                    onClicked: realmVmCard.expanded = !realmVmCard.expanded
+                                  }
+                                }
+                              }
+                            }
+
+                            Rectangle {
+                              visible: root.audioBadge(vm).length > 0
+                              width: parent.width
+                              height: visible ? 22 : 0
+                              radius: 999
+                              color: root.audioBadgeFill(vm)
+                              border.color: root.audioBadgeAccent(vm)
+                              border.width: 1
+                              Text {
+                                anchors.centerIn: parent
+                                color: root.audioBadgeAccent(vm)
+                                font.pixelSize: 11
+                                font.bold: true
+                                text: root.audioBadge(vm)
+                              }
+                            }
+
+                            Flow {
+                              visible: realmVmCard.expanded
+                              height: visible ? implicitHeight : 0
+                              width: parent.width
+                              spacing: 6
+                              IconButton { text: "restart_alt"; tooltip: enabled ? ("Restart " + vm.name) : root.disabledReason(vm, "admin", "restart"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canAdvanced(vm, "restart"); onClicked: root.confirmAction("restart:" + vm.name, "Click again to confirm restarting " + vm.name, ["restart", vm.name]) }
+                              IconButton { text: "verified"; tooltip: enabled ? ("Verify " + vm.name + " store integrity") : root.disabledReason(vm, "admin", "storeVerify"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canAdminMutate() && root.hasCapability(vm, "storeVerify"); onClicked: root.action(["store-verify", vm.name]) }
+                              IconButton { text: "build"; tooltip: enabled ? ("Build/evaluate " + vm.name + " without activating") : root.disabledReason(vm, "launcher", "build"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canMutate() && root.hasCapability(vm, "build"); onClicked: root.action(["build", vm.name]) }
+                              IconButton { text: "move_up"; tooltip: enabled ? ("Stage " + vm.name + " for next boot") : root.disabledReason(vm, "admin", "boot"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canAdminMutate() && root.hasCapability(vm, "boot"); onClicked: root.action(["boot", vm.name]) }
+                              IconButton { text: "sync_alt"; tooltip: enabled ? ("Switch " + vm.name + " generation now") : root.disabledReason(vm, "admin", "switch"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canAdvanced(vm, "switch"); onClicked: root.confirmAction("switch:" + vm.name, "Click again to confirm switching " + vm.name, ["switch", vm.name]) }
+                            }
+
+                            Column {
+                              visible: realmVmCard.expanded && root.hasAudio(vm)
+                              width: parent.width
+                              height: visible ? implicitHeight : 0
+                              spacing: 6
+                              Row {
+                                width: parent.width
+                                spacing: 6
+                                ControlChip { icon: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? "mic" : "mic_off"; label: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? "mic on" : "mic off"; tooltip: enabled ? root.audioTooltip(vm) : root.audioDisabledReason(vm); accent: vm.audio && vm.audio.microphone && !vm.audio.microphone.muted ? root.stateColor("running") : root.shellColor("muted", "#9399b2"); enabled: root.canAudio(vm); onClicked: root.audioToggleAction(vm, "microphone", vm.audio.microphone.muted) }
+                                ControlChip { icon: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? "volume_up" : "volume_off"; label: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? "speaker on" : "speaker off"; tooltip: enabled ? root.audioTooltip(vm) : root.audioDisabledReason(vm); accent: vm.audio && vm.audio.speaker && !vm.audio.speaker.muted ? root.stateColor("running") : root.shellColor("muted", "#9399b2"); enabled: root.canAudio(vm); onClicked: root.audioToggleAction(vm, "speaker", vm.audio.speaker.muted) }
+                                ControlChip { icon: "no_sound"; label: "audio off"; tooltip: enabled ? ("Disable microphone and speaker for " + vm.name) : root.audioDisabledReason(vm); accent: root.stateColor("error"); enabled: root.canAudio(vm); onClicked: root.action(["audio-off", vm.name]) }
+                              }
+                              AudioSlider { width: parent.width; icon: "volume_up"; label: "speaker"; value: root.audioLevel(vm.audio ? vm.audio.speaker : null, 80); enabled: root.canAudio(vm) && vm.audio && vm.audio.speaker && !vm.audio.speaker.muted; tooltip: root.audioSliderTooltip(vm, "speaker"); onCommitted: (level) => root.audioLevelAction(vm, "speaker", level) }
+                              AudioSlider { width: parent.width; icon: "mic"; label: "mic gain"; value: root.audioLevel(vm.audio ? vm.audio.microphone : null, 50); enabled: root.canAudio(vm) && vm.audio && vm.audio.microphone && !vm.audio.microphone.muted; tooltip: root.audioSliderTooltip(vm, "microphone"); onCommitted: (level) => root.audioLevelAction(vm, "microphone", level) }
+                            }
+
+                            Flow {
+                              visible: realmVmCard.expanded && (root.visibleUsbClaims(vm).length > 0 || (root.state.connectivity === "connected" && root.state.role !== "none"))
+                              height: visible ? implicitHeight : 0
+                              width: parent.width
+                              spacing: 6
+                              Repeater {
+                                model: root.visibleUsbClaims(vm)
+                                ControlChip { icon: modelData.bound ? "usb_off" : "usb"; label: root.usbLabel(modelData); tooltip: enabled ? root.usbTooltip(vm, modelData) : (modelData.ownerVm && modelData.ownerVm !== vm.name ? root.usbTooltip(vm, modelData) : root.disabledReason(vm, "admin", "usbHotplug")); accent: root.shellColor("muted", "#9399b2"); enabled: root.canUsb(vm, modelData); onClicked: root.attachOrPrompt(realmVmCard, vm, modelData) }
+                              }
+                              ControlChip { icon: "add"; label: "USB"; tooltip: enabled ? ("Attach another USB device to " + vm.name) : root.disabledReason(vm, "admin", "usbHotplug"); accent: root.shellColor("muted", "#9399b2"); enabled: root.canAdminMutate() && root.hasCapability(vm, "usbHotplug"); onClicked: root.attachOrPrompt(realmVmCard, vm, ({ busId: "pending", bound: false, ownerVm: null })) }
+                              ControlChip { icon: "dangerous"; label: root.forceStopLabel(vm); tooltip: enabled ? ("Force shutdown " + vm.name + "; skips graceful guest shutdown") : root.forceStopDisabledReason(vm); accent: root.stateColor("error"); enabled: root.canForceStop(vm); onClicked: root.confirmForceStop(vm) }
+                              Rectangle { visible: vm.pendingRestart; height: 24; width: restartTextRealm.width + 18; radius: 999; color: root.shellColor("warning_surface", "#2e2a1a"); Text { id: restartTextRealm; anchors.centerIn: parent; color: root.stateColor("pendingRestart"); font.pixelSize: 10; font.bold: true; text: "restart" } }
+                            }
 
                             Row {
-                              anchors.fill: parent
-                              anchors.margins: 7
-                              spacing: 8
-                              Text {
-                              width: 20
-                              anchors.verticalCenter: parent.verticalCenter
-                              color: root.vmDotColor(vm)
-                              font.pixelSize: 15
-                              horizontalAlignment: Text.AlignHCenter
-                              text: root.vmGlyph(vm)
+                              visible: realmVmCard.expanded && realmVmCard.usbEntryVisible
+                              width: parent.width
+                              height: visible ? 30 : 0
+                              spacing: 6
+                              Rectangle {
+                                width: parent.width - 86
+                                height: 28
+                                radius: 8
+                                color: root.shellColor("input_background", "#0d0d0d")
+                                border.color: root.shellColor("border", "#2a2d35")
+                                border.width: 1
+                                TextInput {
+                                  anchors.fill: parent
+                                  anchors.leftMargin: 9
+                                  anchors.rightMargin: 9
+                                  color: root.shellColor("foreground_strong", "#ffffff")
+                                  selectionColor: root.hostAccentColor()
+                                  selectedTextColor: root.shellColor("inverse_foreground", "#000000")
+                                  font.pixelSize: 12
+                                  verticalAlignment: TextInput.AlignVCenter
+                                  text: realmVmCard.usbEntryText
+                                  onTextChanged: realmVmCard.usbEntryText = text
+                                  Keys.onReturnPressed: { if (realmVmCard.usbEntryText.length > 0) root.action(["usb-attach", vm.name, realmVmCard.usbEntryText]) }
+                                }
                               }
-                              Column {
-                              width: parent.width - 82
-                              anchors.verticalCenter: parent.verticalCenter
-                              spacing: 1
-                              Text {
-                                width: parent.width
-                                color: root.shellColor("foreground_strong", "#ffffff")
-                                font.pixelSize: 13
-                                font.bold: true
-                                elide: Text.ElideRight
-                                text: vm.name
-                              }
-                              Text {
-                                width: parent.width
-                                color: root.shellColor("muted", "#9399b2")
-                                font.pixelSize: 10
-                                elide: Text.ElideRight
-                                text: root.workloadVmMeta(vm)
-                              }
-                              }
-                              IconButton {
-                              text: "terminal"
-                              tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin", "terminal")
-                              accent: root.shellColor("foreground_strong", "#ffffff")
-                              enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"
-                              onClicked: root.action(["terminal", vm.name])
+                              ControlChip { icon: "usb"; label: "attach"; tooltip: "Attach entered USB bus id"; accent: root.shellColor("muted", "#9399b2"); enabled: realmVmCard.usbEntryText.length > 0 && root.canAdminMutate() && root.hasCapability(vm, "usbHotplug"); onClicked: root.action(["usb-attach", vm.name, realmVmCard.usbEntryText]) }
                             }
                           }
                         }
