@@ -241,7 +241,7 @@ ShellRoot {
   property var artifactThemeEnv: root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_THEME_JSON"))
   property var realmChooserEntries: []
   property string realmChooserTitle: ""
-  property string realmChooserColor: "#89b4fa"
+  property color realmChooserColor: "#89b4fa"
   property string realmChooserRealmId: ""
 
   function visibleVms() {
@@ -1003,9 +1003,9 @@ ShellRoot {
                 width: list.width
                 height: visible ? chooserContent.implicitHeight + 16 : 0
                 radius: 13
-                color: root.shellColor("surface", "#16181d")
+                color: Qt.rgba(root.realmChooserColor.r, root.realmChooserColor.g, root.realmChooserColor.b, 0.10)
                 border.color: root.realmChooserColor
-                border.width: 1
+                border.width: 2
                 clip: true
 
                 Column {
@@ -1660,6 +1660,9 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("function launchRealmEntry(group, entry)"));
         assert!(QML_SOURCE.contains("Choose workload in "));
         assert!(!QML_SOURCE.contains("Choose \" + entry.icon"));
+        assert!(QML_SOURCE.contains("property color realmChooserColor"));
+        assert!(QML_SOURCE.contains("border.width: 2"));
+        assert!(QML_SOURCE.contains("Qt.rgba(root.realmChooserColor.r"));
         assert!(QML_SOURCE.contains("[\"realm-workload-launch\", group.realmId || group.realmName, entry.actionId, entry.workloadName]"));
         assert!(QML_SOURCE.contains("root.realmChooserEntries"));
         assert!(QML_SOURCE.contains("root.launchChosenRealmEntry(modelData)"));
