@@ -979,32 +979,27 @@ ShellRoot {
                 Rectangle {
                   id: realmCard
                   width: list.width
-                  height: realmSurface.implicitHeight + 4
+                  height: realmContent.implicitHeight + 18
                   radius: 13
                   color: modelData.realmColor || root.hostAccentColor()
                   clip: true
                   property var group: modelData
 
                   Rectangle {
-                    id: realmSurface
-                    anchors.left: parent.left
-                    anchors.leftMargin: 5
-                    anchors.right: parent.right
-                    anchors.rightMargin: 2
-                    anchors.top: parent.top
-                    anchors.topMargin: 2
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 2
+                    x: 5
+                    y: 2
+                    width: parent.width - 7
+                    height: parent.height - 4
                     radius: 10
                     color: root.shellColor("surface", "#16181d")
+                  }
 
-                    Column {
-                      id: realmContent
-                      anchors.left: parent.left
-                      anchors.right: parent.right
-                      anchors.top: parent.top
-                      anchors.margins: 8
-                      spacing: 7
+                  Column {
+                    id: realmContent
+                    x: 13
+                    y: 8
+                    width: parent.width - 21
+                    spacing: 7
 
                       Row {
                         width: parent.width
@@ -1105,7 +1100,6 @@ ShellRoot {
                               accent: root.shellColor("foreground_strong", "#ffffff")
                               enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"
                               onClicked: root.action(["terminal", vm.name])
-                              }
                             }
                           }
                         }
