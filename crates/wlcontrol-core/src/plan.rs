@@ -74,6 +74,7 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
         | ActionKind::AudioMicGain { vm, .. }
         | ActionKind::AudioOff { vm } => audio_block(state, vm),
         ActionKind::StoreVerify { .. } | ActionKind::Build { .. } | ActionKind::Boot { .. } => None,
+        ActionKind::RealmWorkloadLaunch { .. } => None,
         _ => None,
     }
 }
@@ -129,7 +130,8 @@ fn action_target_vm(action: &ActionKind) -> Option<&str> {
         ActionKind::Refresh
         | ActionKind::OpenControlCenter
         | ActionKind::OpenObservability
-        | ActionKind::CycleDisplay => None,
+        | ActionKind::CycleDisplay
+        | ActionKind::RealmWorkloadLaunch { .. } => None,
     }
 }
 
@@ -258,6 +260,11 @@ pub fn plan(
                 detail: "handled in-process; not a d2b dispatch".into(),
             });
         }
+        ActionKind::RealmWorkloadLaunch {
+            realm_id,
+            action_id,
+            ..
+        } => realm_workload_launch_argv(realm_id, action_id),
     };
     Ok(dispatch)
 }
@@ -310,6 +317,7 @@ fn required_role(action: &ActionKind) -> AuthRole {
     match action {
         ActionKind::LaunchTerminal { .. }
         | ActionKind::QuickLaunch { .. }
+        | ActionKind::RealmWorkloadLaunch { .. }
         | ActionKind::Start { .. }
         | ActionKind::Stop { .. }
         | ActionKind::ForceStop { .. }
@@ -473,6 +481,22 @@ fn observability_argv(config: &Config) -> PlannedAction {
     PlannedAction::Process { argv, wait: false }
 }
 
+fn realm_workload_launch_argv(realm_id: &str, action_id: &str) -> PlannedAction {
+    // `d2b realm workload launch --realm <realm_id> <action_id>`
+    PlannedAction::Process {
+        argv: vec![
+            "d2b".to_owned(),
+            "realm".to_owned(),
+            "workload".to_owned(),
+            "launch".to_owned(),
+            "--realm".to_owned(),
+            realm_id.to_owned(),
+            action_id.to_owned(),
+        ],
+        wait: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +510,7 @@ mod tests {
             vms,
             stale: false,
             note: None,
+            ..Default::default()
         }
     }
 

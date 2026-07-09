@@ -26,13 +26,21 @@ identity and keep guest app ids/titles as presentation hints only.
 
 - **Glanceable status in Waybar** — a compact `◆ 2/4` style indicator
   with state-driven CSS classes (`all-running`, `partial-running`,
-  `attention`, `daemon-down`, `auth-denied`) and a per-VM tooltip.
+  `attention`, `daemon-down`, `auth-denied`) and a per-VM tooltip that
+  includes a realm-grouped quick-launch section when launcher metadata is
+  present.
 - **A Quickshell layer-shell control popup** — per-VM cards with lifecycle
   controls, graceful stop as the primary Stop action, detached terminal launch,
   USB attach/detach, audio mic/speaker toggles, speaker volume / mic gain
   sliders, store verify/build/boot/switch icons, config-driven quick-launch
   icons, and an observability portal button, all gated on your effective d2b
   authorization.
+- **Realm-grouped workload launcher panel** — when d2b's
+  `realm-workloads-launcher.json` is readable, wlcontrol groups quick-launch
+  buttons by realm. Each group's outer border uses the realm's accent color
+  (from `ui-colors.json` or the d2b palette hash). Inner workload borders use
+  theme defaults. When multiple workloads in a realm share the same icon a
+  chooser is presented before launching.
 - **d2b-native colors** — Waybar CSS consumes d2b's generated
   `/etc/d2b/ui-colors.css` GTK `@define-color` names, while the popup
   keeps neutral shell colors local and consumes `/etc/d2b/ui-colors.json`
@@ -99,6 +107,15 @@ Configuration is TOML at
 defaults are sane; common overrides are the detached guest terminal command and
 observability URL.
 See [docs/configuration.md](./docs/configuration.md).
+
+The realm-grouped launcher panel reads
+`/etc/d2b/realm-workloads-launcher.json` by default. Override with:
+
+```toml
+launcher_metadata_path = "/etc/d2b/realm-workloads-launcher.json"
+```
+
+Set to `""` to disable realm grouping entirely.
 
 The flake follows the shared d2b toolkit input for public-socket framing,
 Waybar JSON, color parsing, and broker-socket refusal. Keep the toolkit follow

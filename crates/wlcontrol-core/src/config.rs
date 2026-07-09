@@ -16,6 +16,7 @@ use crate::error::{WlError, WlResult};
 /// Default config file location: `${XDG_CONFIG_HOME:-~/.config}/d2b-wlcontrol/config.toml`.
 pub const CONFIG_RELATIVE_PATH: &str = "d2b-wlcontrol/config.toml";
 pub const DEFAULT_COLOR_ARTIFACT_PATH: &str = "/etc/d2b/ui-colors.json";
+pub const DEFAULT_LAUNCHER_METADATA_PATH: &str = "/etc/d2b/realm-workloads-launcher.json";
 
 const PRIVILEGED_BROKER_SOCKET_MESSAGE: &str =
     "refusing to use the privileged broker socket; d2b-wlcontrol speaks only the public socket";
@@ -62,6 +63,11 @@ pub struct Config {
     pub quick_launch: Vec<QuickLaunchConfig>,
     /// Path to d2b's resolved UI color JSON artifact.
     pub color_artifact_path: String,
+    /// Path to d2b's realm workload launcher metadata artifact.
+    ///
+    /// Set to an empty string to disable realm grouping. When the file is
+    /// absent on disk the reducer degrades gracefully (empty `realm_groups`).
+    pub launcher_metadata_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +201,7 @@ impl Default for Config {
             theme: ThemeConfig::default(),
             quick_launch: Vec::new(),
             color_artifact_path: DEFAULT_COLOR_ARTIFACT_PATH.to_owned(),
+            launcher_metadata_path: DEFAULT_LAUNCHER_METADATA_PATH.to_owned(),
         }
     }
 }
@@ -310,6 +317,22 @@ impl Config {
 
     pub fn load_ui_colors(&self) -> WlResult<Option<UiColorArtifact>> {
         load_ui_colors_from_path(Path::new(&self.color_artifact_path))
+    }
+
+    /// Load the realm workload launcher metadata artifact, if configured.
+    ///
+    /// Returns `Ok(None)` when `launcher_metadata_path` is empty (disabled).
+    /// Returns `Ok(Some(vec![]))` when the file is absent. Only returns an
+    /// error for malformed JSON.
+    pub fn load_launcher_metadata(
+        &self,
+    ) -> WlResult<Option<Vec<crate::realm_launcher::LauncherWorkload>>> {
+        if self.launcher_metadata_path.trim().is_empty() {
+            return Ok(None);
+        }
+        crate::realm_launcher::load_launcher_artifact(Path::new(&self.launcher_metadata_path))
+            .map(Some)
+            .map_err(WlError::Config)
     }
 
     /// Resolve the default config path under `$XDG_CONFIG_HOME`.

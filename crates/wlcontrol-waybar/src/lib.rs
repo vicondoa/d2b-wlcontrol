@@ -10,7 +10,7 @@
 //! terminated JSON object per update with `text`, `class`, and `tooltip`.
 
 use serde::{Deserialize, Serialize};
-use wlcontrol_core::model::{AuthRole, Connectivity, RuntimeState, Vm, WlState};
+use wlcontrol_core::model::{AuthRole, Connectivity, RealmGroup, RuntimeState, Vm, WlState};
 
 use d2b_wayland_waybar::WaybarModule;
 
@@ -158,6 +158,57 @@ fn render_tooltip(state: &WlState) -> String {
         lines.push("No visible VMs".to_owned());
     }
 
+    // Realm-grouped quick-launch section.
+    let realm_section = render_realm_quick_launch_section(&state.realm_groups);
+    if !realm_section.is_empty() {
+        lines.push(String::new()); // blank separator
+        lines.push(realm_section);
+    }
+
+    lines.join("\n")
+}
+
+/// Render the realm quick-launch panel section as a tooltip block.
+///
+/// Each realm group is rendered with:
+///   [realm-name] icon1 · icon2 · (icon3 ↕ chooser) …
+///
+/// Entries with icon collisions are annotated with ` (↕)` to signal that
+/// activating them opens a chooser. The outer group color is carried in the
+/// `realm_color` field for compositor/CSS layers; in plain Waybar text it
+/// appears as a parenthesized hex annotation.
+///
+/// Returns an empty string when there are no realm groups.
+pub fn render_realm_quick_launch_section(groups: &[RealmGroup]) -> String {
+    if groups.is_empty() {
+        return String::new();
+    }
+    let mut lines: Vec<String> = Vec::new();
+    lines.push("— realm launchers —".to_owned());
+    for group in groups {
+        if group.workloads.is_empty() {
+            continue;
+        }
+        let entries: Vec<String> = group
+            .workloads
+            .iter()
+            .map(|entry| {
+                if entry.has_icon_collision {
+                    // Chooser required: annotate with ↕ siblings count.
+                    let n = entry.icon_siblings.len() + 1;
+                    format!("[{}↕{n}]", entry.icon)
+                } else {
+                    format!("[{}]", entry.icon)
+                }
+            })
+            .collect();
+        lines.push(format!(
+            "{} ({}): {}",
+            group.realm_name,
+            group.realm_color,
+            entries.join(" · ")
+        ));
+    }
     lines.join("\n")
 }
 
@@ -276,8 +327,8 @@ fn role_label(role: AuthRole) -> &'static str {
 mod tests {
     use super::*;
     use wlcontrol_core::model::{
-        AudioChannelState, AudioEnforcementPosture, AudioProviderKind, UsbClaim, VmAudioState,
-        VmFeatures,
+        AudioChannelState, AudioEnforcementPosture, AudioProviderKind, RealmLauncherEntry,
+        UsbClaim, VmAudioState, VmFeatures,
     };
 
     fn vm(name: &str, state: RuntimeState, net: bool) -> Vm {
@@ -296,6 +347,23 @@ mod tests {
             usb: vec![],
             audio: None,
             quick_launch: vec![],
+        }
+    }
+
+    fn realm_entry(action_id: &str, icon: &str, collision: bool) -> RealmLauncherEntry {
+        RealmLauncherEntry {
+            action_id: action_id.to_owned(),
+            workload_name: action_id.to_owned(),
+            label: action_id.to_owned(),
+            icon: icon.to_owned(),
+            canonical_target: format!("{action_id}.work.d2b"),
+            legacy_vm_name: Some(action_id.to_owned()),
+            has_icon_collision: collision,
+            icon_siblings: if collision {
+                vec!["other".to_owned()]
+            } else {
+                vec![]
+            },
         }
     }
 
@@ -333,6 +401,7 @@ mod tests {
             ],
             stale: false,
             note: None,
+            ..Default::default()
         };
         let line = render(&state);
         assert_eq!(line.text, "◆ 1/2");
@@ -348,6 +417,7 @@ mod tests {
             vms: vec![vm("a", RuntimeState::Running, false)],
             stale: false,
             note: None,
+            ..Default::default()
         };
         assert_eq!(render(&state), render_mode(&state, DisplayMode::Compact));
     }
@@ -363,6 +433,7 @@ mod tests {
             ],
             stale: false,
             note: None,
+            ..Default::default()
         };
 
         let compact = render_mode(&state, DisplayMode::Compact);
@@ -382,6 +453,7 @@ mod tests {
                 .collect(),
             stale: false,
             note: None,
+            ..Default::default()
         };
 
         let detail = render_mode(&state, DisplayMode::Detail);
@@ -400,6 +472,7 @@ mod tests {
             vms: vec![target],
             stale: true,
             note: None,
+            ..Default::default()
         };
 
         let line = render(&state);
@@ -448,6 +521,7 @@ mod tests {
             vms: vec![target, errored],
             stale: false,
             note: None,
+            ..Default::default()
         };
 
         let line = render(&state);
@@ -478,6 +552,7 @@ mod tests {
             ],
             stale: false,
             note: None,
+            ..Default::default()
         };
         let stopped_line = render(&all_stopped);
         assert_eq!(stopped_line.text, "◆ 0/2");
@@ -501,6 +576,7 @@ mod tests {
             ],
             stale: false,
             note: Some("cached after refresh failure".to_owned()),
+            ..Default::default()
         };
 
         let line = render(&state);
@@ -539,5 +615,88 @@ mod tests {
         assert_eq!(value["class"], serde_json::json!(["all-running"]));
         assert!(value.get("alt").is_none());
         assert!(value.get("percentage").is_none());
+    }
+
+    #[test]
+    fn realm_quick_launch_section_empty_when_no_groups() {
+        assert!(render_realm_quick_launch_section(&[]).is_empty());
+    }
+
+    #[test]
+    fn realm_quick_launch_section_renders_groups_and_icons() {
+        let groups = vec![
+            RealmGroup {
+                realm_name: "work".to_owned(),
+                realm_id: "work".to_owned(),
+                realm_color: "#90d090".to_owned(),
+                workloads: vec![
+                    realm_entry("browser", "web", false),
+                    realm_entry("terminal", "terminal", false),
+                ],
+            },
+            RealmGroup {
+                realm_name: "personal".to_owned(),
+                realm_id: "personal".to_owned(),
+                realm_color: "#7fc8ff".to_owned(),
+                workloads: vec![realm_entry("music", "music_note", false)],
+            },
+        ];
+        let section = render_realm_quick_launch_section(&groups);
+        assert!(section.contains("— realm launchers —"));
+        assert!(section.contains("work (#90d090): [web] · [terminal]"));
+        assert!(section.contains("personal (#7fc8ff): [music_note]"));
+    }
+
+    #[test]
+    fn realm_quick_launch_section_annotates_icon_collisions() {
+        let groups = vec![RealmGroup {
+            realm_name: "work".to_owned(),
+            realm_id: "work".to_owned(),
+            realm_color: "#ff8000".to_owned(),
+            workloads: vec![
+                realm_entry("browser", "web", true),
+                realm_entry("mail", "web", true),
+                realm_entry("terminal", "terminal", false),
+            ],
+        }];
+        let section = render_realm_quick_launch_section(&groups);
+        // Colliding entries carry ↕ and sibling count.
+        assert!(section.contains("[web↕2]"), "section: {section}");
+        // Non-colliding entry has no annotation.
+        assert!(section.contains("[terminal]"), "section: {section}");
+        // Both collisions are present.
+        assert_eq!(section.matches("[web↕2]").count(), 2);
+    }
+
+    #[test]
+    fn tooltip_includes_realm_section_when_groups_present() {
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            vms: vec![vm("corp-vm", RuntimeState::Running, false)],
+            realm_groups: vec![RealmGroup {
+                realm_name: "work".to_owned(),
+                realm_id: "work".to_owned(),
+                realm_color: "#90d090".to_owned(),
+                workloads: vec![realm_entry("browser", "web", false)],
+            }],
+            stale: false,
+            note: None,
+        };
+        let line = render(&state);
+        assert!(line.tooltip.contains("— realm launchers —"));
+        assert!(line.tooltip.contains("work (#90d090): [web]"));
+    }
+
+    #[test]
+    fn tooltip_omits_realm_section_when_no_groups() {
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Admin,
+            vms: vec![vm("corp-vm", RuntimeState::Running, false)],
+            ..Default::default()
+        };
+        let line = render(&state);
+        assert!(!line.tooltip.contains("— realm launchers —"));
     }
 }
