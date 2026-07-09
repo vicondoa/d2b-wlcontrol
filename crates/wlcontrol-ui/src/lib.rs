@@ -1294,7 +1294,7 @@ ShellRoot {
               }
 
               Repeater {
-                model: root.ungroupedVms()
+                model: []
 
                 Rectangle {
                   id: vmCard
@@ -1896,7 +1896,7 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("function toggleRealmCollapsed(group)"));
         assert!(QML_SOURCE.contains("root.vmsForRealm(realmCard.group).length + \" VM\""));
         assert!(QML_SOURCE.contains("model: root.vmsForRealm(realmCard.group)"));
-        assert!(QML_SOURCE.contains("model: root.ungroupedVms()"));
+        assert!(QML_SOURCE.contains("model: []"));
         assert!(QML_SOURCE.contains("function launchRealmEntry(group, entry)"));
         assert!(QML_SOURCE.contains("Choose workload in "));
         assert!(!QML_SOURCE.contains("Choose \" + entry.icon"));
