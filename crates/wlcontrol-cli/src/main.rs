@@ -106,6 +106,12 @@ enum ActionCommand {
     Terminal { vm: String },
     /// Run a configured guest quick-launch command.
     QuickLaunch { vm: String, id: String },
+    /// Launch a realm workload action from the launcher metadata artifact.
+    RealmWorkloadLaunch {
+        realm_id: String,
+        action_id: String,
+        workload_name: String,
+    },
     /// Attach a USB busid to a VM.
     UsbAttach { vm: String, bus_id: String },
     /// Detach a USB busid from a VM.
@@ -146,6 +152,15 @@ impl ActionCommand {
             ActionCommand::Boot { vm } => ActionKind::Boot { vm },
             ActionCommand::Terminal { vm } => ActionKind::LaunchTerminal { vm },
             ActionCommand::QuickLaunch { vm, id } => ActionKind::QuickLaunch { vm, id },
+            ActionCommand::RealmWorkloadLaunch {
+                realm_id,
+                action_id,
+                workload_name,
+            } => ActionKind::RealmWorkloadLaunch {
+                realm_id,
+                action_id,
+                workload_name,
+            },
             ActionCommand::UsbAttach { vm, bus_id } => ActionKind::UsbAttach { vm, bus_id },
             ActionCommand::UsbDetach { vm, bus_id } => ActionKind::UsbDetach { vm, bus_id },
             ActionCommand::StoreVerify { vm } => ActionKind::StoreVerify { vm },

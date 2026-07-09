@@ -239,6 +239,10 @@ ShellRoot {
   property bool observabilityEnabled: Quickshell.env("D2B_WLCONTROL_OBSERVABILITY_ENABLED") === "1"
   property string observabilitySuccess: Quickshell.env("D2B_WLCONTROL_OBSERVABILITY_SUCCESS") || "Opened observability portal"
   property var artifactThemeEnv: root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_THEME_JSON"))
+  property var realmChooserEntries: []
+  property string realmChooserTitle: ""
+  property string realmChooserColor: "#89b4fa"
+  property string realmChooserRealmId: ""
 
   function visibleVms() {
     const vms = state.vms || []
@@ -250,6 +254,14 @@ ShellRoot {
         return sysDiff !== 0 ? sysDiff : a.index - b.index
       })
       .map(entry => entry.vm)
+  }
+
+  function realmGroups() {
+    return state.realmGroups || []
+  }
+
+  function realmWorkloadCount() {
+    return realmGroups().reduce((sum, group) => sum + ((group.workloads || []).length), 0)
   }
 
   function runningCount() {
@@ -341,6 +353,37 @@ ShellRoot {
     actionClearTimer.stop()
     actionProc.args = args
     actionProc.exec([backend, "action"].concat(args))
+  }
+
+  function realmLaunchTooltip(group, entry) {
+    const target = entry.canonicalTarget || (entry.workloadName + "." + group.realmName + ".d2b")
+    if (entry.hasIconCollision) return "Choose a " + entry.icon + " workload in " + group.realmName
+    return "Launch " + entry.label + " (" + target + ")"
+  }
+
+  function matchingRealmEntries(group, entry) {
+    const entries = group.workloads || []
+    if (!entry.hasIconCollision) return [entry]
+    return entries.filter(candidate => candidate.icon === entry.icon)
+  }
+
+  function launchRealmEntry(group, entry) {
+    if (entry.hasIconCollision) {
+      realmChooserEntries = matchingRealmEntries(group, entry)
+      realmChooserTitle = "Choose " + entry.icon + " in " + group.realmName
+      realmChooserColor = group.realmColor || root.hostAccentColor()
+      realmChooserRealmId = group.realmId || group.realmName
+      hoverHint = realmChooserTitle
+      return
+    }
+    action(["realm-workload-launch", group.realmId || group.realmName, entry.actionId, entry.workloadName])
+  }
+
+  function launchChosenRealmEntry(entry) {
+    action(["realm-workload-launch", realmChooserRealmId, entry.actionId, entry.workloadName])
+    realmChooserEntries = []
+    realmChooserTitle = ""
+    realmChooserRealmId = ""
   }
 
   function attachOrPrompt(card, vm, u) {
@@ -538,6 +581,7 @@ ShellRoot {
     if (verb === "audio-off") return "Disabling audio for " + vm + "..."
     if (verb === "terminal") return "Opening terminal in " + vm + "..."
     if (verb === "quick-launch") return "Launching " + (args[2] || "command") + " in " + vm + "..."
+    if (verb === "realm-workload-launch") return "Launching " + (args[3] || args[2] || "workload") + "..."
     if (verb === "build") return "Building " + vm + "..."
     if (verb === "boot") return "Staging " + vm + " for next boot..."
     if (verb === "switch") return "Switching " + vm + "..."
@@ -562,6 +606,7 @@ ShellRoot {
     if (verb === "audio-off") return "Audio disabled for " + vm
     if (verb === "terminal") return "Terminal launch requested for " + vm
     if (verb === "quick-launch") return "Quick launch requested for " + vm
+    if (verb === "realm-workload-launch") return "Realm workload launch requested for " + (args[3] || args[2] || "workload")
     if (verb === "build") return "Build completed for " + vm
     if (verb === "boot") return "Boot generation staged for " + vm
     if (verb === "switch") return "Switched " + vm
@@ -884,6 +929,134 @@ ShellRoot {
               id: list
               width: parent.width
               spacing: 8
+
+              Repeater {
+                model: root.realmGroups()
+
+                Rectangle {
+                  id: realmCard
+                  width: list.width
+                  height: realmContent.implicitHeight + 16
+                  radius: 13
+                  color: root.shellColor("surface", "#16181d")
+                  border.color: modelData.realmColor || root.hostAccentColor()
+                  border.width: 1
+                  clip: true
+                  property var group: modelData
+
+                  Column {
+                    id: realmContent
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 8
+                    spacing: 7
+
+                    Row {
+                      width: parent.width
+                      height: 24
+                      spacing: 8
+                      Rectangle {
+                        width: 8
+                        height: 8
+                        radius: 999
+                        color: modelData.realmColor || root.hostAccentColor()
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
+                      Text {
+                        width: parent.width - 96
+                        color: root.shellColor("foreground_strong", "#ffffff")
+                        font.pixelSize: 13
+                        font.bold: true
+                        elide: Text.ElideRight
+                        text: modelData.realmName
+                      }
+                      Text {
+                        color: root.shellColor("muted", "#9399b2")
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: (modelData.workloads || []).length + " workload" + ((modelData.workloads || []).length === 1 ? "" : "s")
+                      }
+                    }
+
+                    Flow {
+                      width: parent.width
+                      spacing: 6
+                      Repeater {
+                        model: modelData.workloads || []
+                        ControlChip {
+                          icon: modelData.icon
+                          label: modelData.label
+                          tooltip: root.realmLaunchTooltip(realmCard.group, modelData)
+                          accent: root.shellColor("muted", "#9399b2")
+                          enabled: root.canMutate()
+                          onClicked: root.launchRealmEntry(realmCard.group, modelData)
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              Rectangle {
+                visible: root.realmChooserEntries.length > 0
+                width: list.width
+                height: visible ? chooserContent.implicitHeight + 16 : 0
+                radius: 13
+                color: root.shellColor("surface", "#16181d")
+                border.color: root.realmChooserColor
+                border.width: 1
+                clip: true
+
+                Column {
+                  id: chooserContent
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
+                  anchors.margins: 8
+                  spacing: 7
+
+                  Row {
+                    width: parent.width
+                    height: 24
+                    Text {
+                      width: parent.width - 34
+                      color: root.shellColor("foreground_strong", "#ffffff")
+                      font.pixelSize: 13
+                      font.bold: true
+                      elide: Text.ElideRight
+                      text: root.realmChooserTitle
+                    }
+                    IconButton {
+                      text: "close"
+                      tooltip: "Close chooser"
+                      accent: root.shellColor("foreground_strong", "#ffffff")
+                      enabled: true
+                      onClicked: {
+                        root.realmChooserEntries = []
+                        root.realmChooserTitle = ""
+                        root.realmChooserRealmId = ""
+                      }
+                    }
+                  }
+
+                  Flow {
+                    width: parent.width
+                    spacing: 6
+                    Repeater {
+                      model: root.realmChooserEntries
+                      ControlChip {
+                        icon: modelData.icon
+                        label: modelData.label
+                        tooltip: "Launch " + modelData.canonicalTarget
+                        accent: root.shellColor("muted", "#9399b2")
+                        enabled: root.canMutate()
+                        onClicked: root.launchChosenRealmEntry(modelData)
+                      }
+                    }
+                  }
+                }
+              }
 
               Repeater {
                 model: root.visibleVms()
@@ -1482,6 +1655,12 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("onExited: (exitCode, exitStatus)"));
         assert!(QML_SOURCE.contains("D2B_WLCONTROL_OBSERVABILITY_ENABLED"));
         assert!(QML_SOURCE.contains("D2B_WLCONTROL_THEME_JSON"));
+        assert!(QML_SOURCE.contains("function realmGroups()"));
+        assert!(QML_SOURCE.contains("model: root.realmGroups()"));
+        assert!(QML_SOURCE.contains("function launchRealmEntry(group, entry)"));
+        assert!(QML_SOURCE.contains("[\"realm-workload-launch\", group.realmId || group.realmName, entry.actionId, entry.workloadName]"));
+        assert!(QML_SOURCE.contains("root.realmChooserEntries"));
+        assert!(QML_SOURCE.contains("root.launchChosenRealmEntry(modelData)"));
         assert!(QML_SOURCE.contains("function shellColor(name, fallback)"));
         assert!(QML_SOURCE.contains("root.shellColor(\"surface\", \"#16181d\")"));
         assert!(QML_SOURCE.contains("root.shellColor(\"foreground_strong\", \"#ffffff\")"));
