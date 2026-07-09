@@ -979,114 +979,107 @@ ShellRoot {
                 Rectangle {
                   id: realmCard
                   width: list.width
-                  height: realmContent.implicitHeight + 16
+                  height: realmSurface.implicitHeight + 4
                   radius: 13
-                  color: root.shellColor("surface", "#16181d")
-                  border.color: modelData.realmColor || root.hostAccentColor()
-                  border.width: 1
+                  color: modelData.realmColor || root.hostAccentColor()
                   clip: true
                   property var group: modelData
+
                   Rectangle {
-                    width: 5
+                    id: realmSurface
                     anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    radius: 13
-                    color: modelData.realmColor || root.hostAccentColor()
-                  }
-
-                  Column {
-                    id: realmContent
-                    anchors.left: parent.left
+                    anchors.leftMargin: 5
                     anchors.right: parent.right
+                    anchors.rightMargin: 2
                     anchors.top: parent.top
-                    anchors.topMargin: 8
-                    anchors.rightMargin: 8
-                    anchors.bottomMargin: 8
-                    anchors.leftMargin: 14
-                    spacing: 7
-
-                    Row {
-                      width: parent.width
-                      height: 24
-                      spacing: 8
-                      Rectangle {
-                        width: 8
-                        height: 8
-                        radius: 999
-                        color: modelData.realmColor || root.hostAccentColor()
-                        anchors.verticalCenter: parent.verticalCenter
-                      }
-                      Text {
-                        width: parent.width - 126
-                        color: root.shellColor("foreground_strong", "#ffffff")
-                        font.pixelSize: 13
-                        font.bold: true
-                        elide: Text.ElideRight
-                        text: modelData.realmName
-                      }
-                      Text {
-                        color: root.shellColor("muted", "#9399b2")
-                        font.pixelSize: 10
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: root.vmsForRealm(realmCard.group).length + " VM" + (root.vmsForRealm(realmCard.group).length === 1 ? "" : "s")
-                      }
-                      IconButton {
-                        text: root.isRealmCollapsed(realmCard.group) ? "expand_more" : "expand_less"
-                        tooltip: root.isRealmCollapsed(realmCard.group) ? "Expand " + modelData.realmName : "Collapse " + modelData.realmName
-                        accent: root.shellColor("foreground_strong", "#ffffff")
-                        enabled: true
-                        onClicked: root.toggleRealmCollapsed(realmCard.group)
-                      }
-                    }
-
-                    Flow {
-                      visible: !root.isRealmCollapsed(realmCard.group)
-                      height: visible ? implicitHeight : 0
-                      width: parent.width
-                      spacing: 6
-                      Repeater {
-                        model: modelData.workloads || []
-                        ControlChip {
-                          icon: modelData.icon
-                          label: modelData.label
-                          tooltip: root.realmLaunchTooltip(realmCard.group, modelData)
-                          accent: root.shellColor("muted", "#9399b2")
-                          enabled: root.canMutate()
-                          onClicked: root.launchRealmEntry(realmCard.group, modelData)
-                        }
-                      }
-                    }
+                    anchors.topMargin: 2
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 2
+                    radius: 10
+                    color: root.shellColor("surface", "#16181d")
 
                     Column {
-                      visible: !root.isRealmCollapsed(realmCard.group)
-                      height: visible ? implicitHeight : 0
-                      width: parent.width
-                      spacing: 6
-                      Repeater {
-                        model: root.vmsForRealm(realmCard.group)
-                        Rectangle {
-                          width: parent.width
-                          height: 40
-                          radius: 10
-                          color: root.shellColor("input_background", "#0d0d0d")
-                          border.color: root.shellColor("border", "#2a2d35")
-                          border.width: 1
-                          property var vm: modelData
+                      id: realmContent
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.top: parent.top
+                      anchors.margins: 8
+                      spacing: 7
 
-                          Row {
-                            anchors.fill: parent
-                            anchors.margins: 7
-                            spacing: 8
-                            Text {
+                      Row {
+                        width: parent.width
+                        height: 24
+                        spacing: 8
+                        Text {
+                          width: parent.width - 88
+                          color: root.shellColor("foreground_strong", "#ffffff")
+                          font.pixelSize: 13
+                          font.bold: true
+                          elide: Text.ElideRight
+                          text: modelData.realmName
+                        }
+                        Text {
+                          color: root.shellColor("muted", "#9399b2")
+                          font.pixelSize: 10
+                          anchors.verticalCenter: parent.verticalCenter
+                          text: root.vmsForRealm(realmCard.group).length + " VM" + (root.vmsForRealm(realmCard.group).length === 1 ? "" : "s")
+                        }
+                        IconButton {
+                          text: root.isRealmCollapsed(realmCard.group) ? "expand_more" : "expand_less"
+                          tooltip: root.isRealmCollapsed(realmCard.group) ? "Expand " + modelData.realmName : "Collapse " + modelData.realmName
+                          accent: root.shellColor("foreground_strong", "#ffffff")
+                          enabled: true
+                          onClicked: root.toggleRealmCollapsed(realmCard.group)
+                        }
+                      }
+
+                      Flow {
+                        visible: !root.isRealmCollapsed(realmCard.group)
+                        height: visible ? implicitHeight : 0
+                        width: parent.width
+                        spacing: 6
+                        Repeater {
+                          model: modelData.workloads || []
+                          ControlChip {
+                            icon: modelData.icon
+                            label: modelData.label
+                            tooltip: root.realmLaunchTooltip(realmCard.group, modelData)
+                            accent: root.shellColor("muted", "#9399b2")
+                            enabled: root.canMutate()
+                            onClicked: root.launchRealmEntry(realmCard.group, modelData)
+                          }
+                        }
+                      }
+
+                      Column {
+                        visible: !root.isRealmCollapsed(realmCard.group)
+                        height: visible ? implicitHeight : 0
+                        width: parent.width
+                        spacing: 6
+                        Repeater {
+                          model: root.vmsForRealm(realmCard.group)
+                          Rectangle {
+                            width: parent.width
+                            height: 40
+                            radius: 10
+                            color: root.shellColor("input_background", "#0d0d0d")
+                            border.color: root.shellColor("border", "#2a2d35")
+                            border.width: 1
+                            property var vm: modelData
+
+                            Row {
+                              anchors.fill: parent
+                              anchors.margins: 7
+                              spacing: 8
+                              Text {
                               width: 20
                               anchors.verticalCenter: parent.verticalCenter
                               color: root.vmDotColor(vm)
                               font.pixelSize: 15
                               horizontalAlignment: Text.AlignHCenter
                               text: root.vmGlyph(vm)
-                            }
-                            Column {
+                              }
+                              Column {
                               width: parent.width - 82
                               anchors.verticalCenter: parent.verticalCenter
                               spacing: 1
@@ -1105,13 +1098,14 @@ ShellRoot {
                                 elide: Text.ElideRight
                                 text: root.workloadVmMeta(vm)
                               }
-                            }
-                            IconButton {
+                              }
+                              IconButton {
                               text: "terminal"
                               tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin", "terminal")
                               accent: root.shellColor("foreground_strong", "#ffffff")
                               enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"
                               onClicked: root.action(["terminal", vm.name])
+                              }
                             }
                           }
                         }
