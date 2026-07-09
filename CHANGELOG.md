@@ -38,6 +38,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
   Waybar, wlterm, clip-picker, and Wayland rails.
 - **Chooser frame.** Duplicate launcher chooser cards now use a stronger
   realm-colored outer border and subtle realm-tinted background.
+- **Realm card rail.** Realm cards now use a rounded color rail and include
+  their backing VMs as neutral inner rows; each realm can collapse down to just
+  the realm name and VM count.
 - **Realm-aware VM identity.** The reduced VM model now carries d2b-provided
   canonical realm targets when available and falls back to `<vm>.local.d2b` for
   local VMs, so desktop surfaces can distinguish trusted d2b identity from

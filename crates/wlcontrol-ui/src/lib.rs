@@ -243,6 +243,7 @@ ShellRoot {
   property string realmChooserTitle: ""
   property color realmChooserColor: "#89b4fa"
   property string realmChooserRealmId: ""
+  property var collapsedRealms: ({})
 
   function visibleVms() {
     const vms = state.vms || []
@@ -262,6 +263,38 @@ ShellRoot {
 
   function realmWorkloadCount() {
     return realmGroups().reduce((sum, group) => sum + ((group.workloads || []).length), 0)
+  }
+
+  function realmKey(group) {
+    return group.realmId || group.realmName || "default"
+  }
+
+  function isRealmCollapsed(group) {
+    return collapsedRealms[root.realmKey(group)] === true
+  }
+
+  function toggleRealmCollapsed(group) {
+    const key = root.realmKey(group)
+    const next = Object.assign({}, collapsedRealms)
+    next[key] = !next[key]
+    collapsedRealms = next
+  }
+
+  function vmMatchesRealmWorkload(vm, workload) {
+    if (!vm || !workload) return false
+    if (workload.legacyVmName && vm.name === workload.legacyVmName) return true
+    if (workload.canonicalTarget && vm.canonicalTarget === workload.canonicalTarget) return true
+    return false
+  }
+
+  function vmsForRealm(group) {
+    const workloads = group.workloads || []
+    return root.visibleVms().filter(vm => workloads.some(workload => root.vmMatchesRealmWorkload(vm, workload)))
+  }
+
+  function ungroupedVms() {
+    const groups = root.realmGroups()
+    return root.visibleVms().filter(vm => !groups.some(group => root.vmsForRealm(group).some(groupVm => groupVm.name === vm.name)))
   }
 
   function runningCount() {
@@ -331,6 +364,16 @@ ShellRoot {
     const parts = [vm.env || "default"]
     if (vm.state && vm.state !== "unknown") parts.push(vm.state)
     if (vm.staticIp) parts.push(vm.staticIp)
+    if (vm.pendingRestart) parts.push("pending restart")
+    const audio = root.audioBadge(vm)
+    if (audio.length > 0) parts.push(audio)
+    return parts.join(" · ")
+  }
+
+  function workloadVmMeta(vm) {
+    const parts = []
+    if (vm.canonicalTarget) parts.push(vm.canonicalTarget)
+    if (vm.state && vm.state !== "unknown") parts.push(vm.state)
     if (vm.pendingRestart) parts.push("pending restart")
     const audio = root.audioBadge(vm)
     if (audio.length > 0) parts.push(audio)
@@ -943,13 +986,24 @@ ShellRoot {
                   border.width: 1
                   clip: true
                   property var group: modelData
+                  Rectangle {
+                    width: 5
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    radius: 13
+                    color: modelData.realmColor || root.hostAccentColor()
+                  }
 
                   Column {
                     id: realmContent
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
-                    anchors.margins: 8
+                    anchors.topMargin: 8
+                    anchors.rightMargin: 8
+                    anchors.bottomMargin: 8
+                    anchors.leftMargin: 14
                     spacing: 7
 
                     Row {
@@ -964,7 +1018,7 @@ ShellRoot {
                         anchors.verticalCenter: parent.verticalCenter
                       }
                       Text {
-                        width: parent.width - 96
+                        width: parent.width - 126
                         color: root.shellColor("foreground_strong", "#ffffff")
                         font.pixelSize: 13
                         font.bold: true
@@ -975,11 +1029,20 @@ ShellRoot {
                         color: root.shellColor("muted", "#9399b2")
                         font.pixelSize: 10
                         anchors.verticalCenter: parent.verticalCenter
-                        text: (modelData.workloads || []).length + " workload" + ((modelData.workloads || []).length === 1 ? "" : "s")
+                        text: root.vmsForRealm(realmCard.group).length + " VM" + (root.vmsForRealm(realmCard.group).length === 1 ? "" : "s")
+                      }
+                      IconButton {
+                        text: root.isRealmCollapsed(realmCard.group) ? "expand_more" : "expand_less"
+                        tooltip: root.isRealmCollapsed(realmCard.group) ? "Expand " + modelData.realmName : "Collapse " + modelData.realmName
+                        accent: root.shellColor("foreground_strong", "#ffffff")
+                        enabled: true
+                        onClicked: root.toggleRealmCollapsed(realmCard.group)
                       }
                     }
 
                     Flow {
+                      visible: !root.isRealmCollapsed(realmCard.group)
+                      height: visible ? implicitHeight : 0
                       width: parent.width
                       spacing: 6
                       Repeater {
@@ -991,6 +1054,66 @@ ShellRoot {
                           accent: root.shellColor("muted", "#9399b2")
                           enabled: root.canMutate()
                           onClicked: root.launchRealmEntry(realmCard.group, modelData)
+                        }
+                      }
+                    }
+
+                    Column {
+                      visible: !root.isRealmCollapsed(realmCard.group)
+                      height: visible ? implicitHeight : 0
+                      width: parent.width
+                      spacing: 6
+                      Repeater {
+                        model: root.vmsForRealm(realmCard.group)
+                        Rectangle {
+                          width: parent.width
+                          height: 40
+                          radius: 10
+                          color: root.shellColor("input_background", "#0d0d0d")
+                          border.color: root.shellColor("border", "#2a2d35")
+                          border.width: 1
+                          property var vm: modelData
+
+                          Row {
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            spacing: 8
+                            Text {
+                              width: 20
+                              anchors.verticalCenter: parent.verticalCenter
+                              color: root.vmDotColor(vm)
+                              font.pixelSize: 15
+                              horizontalAlignment: Text.AlignHCenter
+                              text: root.vmGlyph(vm)
+                            }
+                            Column {
+                              width: parent.width - 82
+                              anchors.verticalCenter: parent.verticalCenter
+                              spacing: 1
+                              Text {
+                                width: parent.width
+                                color: root.shellColor("foreground_strong", "#ffffff")
+                                font.pixelSize: 13
+                                font.bold: true
+                                elide: Text.ElideRight
+                                text: vm.name
+                              }
+                              Text {
+                                width: parent.width
+                                color: root.shellColor("muted", "#9399b2")
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                                text: root.workloadVmMeta(vm)
+                              }
+                            }
+                            IconButton {
+                              text: "terminal"
+                              tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin", "terminal")
+                              accent: root.shellColor("foreground_strong", "#ffffff")
+                              enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"
+                              onClicked: root.action(["terminal", vm.name])
+                            }
+                          }
                         }
                       }
                     }
@@ -1059,7 +1182,7 @@ ShellRoot {
               }
 
               Repeater {
-                model: root.visibleVms()
+                model: root.ungroupedVms()
 
                 Rectangle {
                   id: vmCard
@@ -1657,6 +1780,11 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("D2B_WLCONTROL_THEME_JSON"));
         assert!(QML_SOURCE.contains("function realmGroups()"));
         assert!(QML_SOURCE.contains("model: root.realmGroups()"));
+        assert!(QML_SOURCE.contains("property var collapsedRealms"));
+        assert!(QML_SOURCE.contains("function toggleRealmCollapsed(group)"));
+        assert!(QML_SOURCE.contains("root.vmsForRealm(realmCard.group).length + \" VM\""));
+        assert!(QML_SOURCE.contains("model: root.vmsForRealm(realmCard.group)"));
+        assert!(QML_SOURCE.contains("model: root.ungroupedVms()"));
         assert!(QML_SOURCE.contains("function launchRealmEntry(group, entry)"));
         assert!(QML_SOURCE.contains("Choose workload in "));
         assert!(!QML_SOURCE.contains("Choose \" + entry.icon"));
