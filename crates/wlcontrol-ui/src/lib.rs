@@ -981,9 +981,7 @@ ShellRoot {
                   width: list.width
                   height: realmContent.implicitHeight + 18
                   radius: 13
-                  color: root.shellColor("surface", "#16181d")
-                  border.color: root.shellColor("border", "#2a2d35")
-                  border.width: 1
+                  color: "transparent"
                   clip: true
                   property var group: modelData
 
@@ -994,6 +992,16 @@ ShellRoot {
                     height: parent.height
                     radius: 0
                     color: modelData.realmColor || root.hostAccentColor()
+                  }
+                  Rectangle {
+                    x: 5
+                    y: 0
+                    width: parent.width - 5
+                    height: parent.height
+                    radius: 10
+                    color: root.shellColor("surface", "#16181d")
+                    border.color: root.shellColor("border", "#2a2d35")
+                    border.width: 1
                   }
 
                   Column {
@@ -1236,9 +1244,7 @@ ShellRoot {
                         width: parent.width
                         height: visible ? inlineChooserContent.implicitHeight + 14 : 0
                         radius: 10
-                        color: root.shellColor("input_background", "#0d0d0d")
-                        border.color: root.shellColor("border", "#2a2d35")
-                        border.width: 1
+                        color: "transparent"
                         clip: true
                         Rectangle {
                           x: 0
@@ -1247,6 +1253,16 @@ ShellRoot {
                           height: parent.height
                           radius: 10
                           color: root.realmChooserColor
+                        }
+                        Rectangle {
+                          x: 4
+                          y: 0
+                          width: parent.width - 4
+                          height: parent.height
+                          radius: 8
+                          color: root.shellColor("input_background", "#0d0d0d")
+                          border.color: root.shellColor("border", "#2a2d35")
+                          border.width: 1
                         }
                         Column {
                           id: inlineChooserContent
