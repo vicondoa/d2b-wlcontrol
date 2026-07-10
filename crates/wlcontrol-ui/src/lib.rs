@@ -981,17 +981,19 @@ ShellRoot {
                   width: list.width
                   height: realmContent.implicitHeight + 18
                   radius: 13
-                  color: modelData.realmColor || root.hostAccentColor()
+                  color: root.shellColor("surface", "#16181d")
+                  border.color: root.shellColor("border", "#2a2d35")
+                  border.width: 1
                   clip: true
                   property var group: modelData
 
                   Rectangle {
-                    x: 5
-                    y: 2
-                    width: parent.width - 7
-                    height: parent.height - 4
-                    radius: 10
-                    color: root.shellColor("surface", "#16181d")
+                    x: 0
+                    y: 0
+                    width: 5
+                    height: parent.height
+                    radius: 13
+                    color: modelData.realmColor || root.hostAccentColor()
                   }
 
                   Column {
@@ -1238,17 +1240,28 @@ ShellRoot {
                 width: list.width
                 height: visible ? chooserContent.implicitHeight + 16 : 0
                 radius: 13
-                color: Qt.rgba(root.realmChooserColor.r, root.realmChooserColor.g, root.realmChooserColor.b, 0.10)
-                border.color: root.realmChooserColor
-                border.width: 2
+                color: root.shellColor("surface", "#16181d")
+                border.color: root.shellColor("border", "#2a2d35")
+                border.width: 1
                 clip: true
+                Rectangle {
+                  x: 0
+                  y: 0
+                  width: 5
+                  height: parent.height
+                  radius: 13
+                  color: root.realmChooserColor
+                }
 
                 Column {
                   id: chooserContent
                   anchors.left: parent.left
                   anchors.right: parent.right
                   anchors.top: parent.top
-                  anchors.margins: 8
+                  anchors.topMargin: 8
+                  anchors.rightMargin: 8
+                  anchors.bottomMargin: 8
+                  anchors.leftMargin: 13
                   spacing: 7
 
                   Row {
@@ -1901,8 +1914,8 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("Choose workload in "));
         assert!(!QML_SOURCE.contains("Choose \" + entry.icon"));
         assert!(QML_SOURCE.contains("property color realmChooserColor"));
-        assert!(QML_SOURCE.contains("border.width: 2"));
-        assert!(QML_SOURCE.contains("Qt.rgba(root.realmChooserColor.r"));
+        assert!(QML_SOURCE.contains("border.color: root.shellColor(\"border\", \"#2a2d35\")"));
+        assert!(QML_SOURCE.contains("color: root.realmChooserColor"));
         assert!(QML_SOURCE.contains("[\"realm-workload-launch\", group.realmId || group.realmName, entry.actionId, entry.workloadName]"));
         assert!(QML_SOURCE.contains("root.realmChooserEntries"));
         assert!(QML_SOURCE.contains("root.launchChosenRealmEntry(modelData)"));
