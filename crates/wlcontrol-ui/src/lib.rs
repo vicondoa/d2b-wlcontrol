@@ -1110,17 +1110,6 @@ ShellRoot {
                                   spacing: 5
                                   anchors.verticalCenter: parent.verticalCenter
                                   IconButton {
-                                    text: vm.state === "running" ? "stop" : "play_arrow"
-                                    tooltip: enabled ? ((vm.state === "running" ? "Gracefully stop " : "Start ") + vm.name) : root.disabledReason(vm, "admin", vm.state === "running" ? "stop" : "start")
-                                    accent: vm.state === "running" ? root.stateColor("transitioning") : root.stateColor("running")
-                                    enabled: vm.state === "running" ? root.canStop(vm) : root.canStart(vm)
-                                    prominent: true
-                                    onClicked: {
-                                      if (vm.state === "running") root.confirmAction("stop:" + vm.name, "Click again to gracefully stop " + vm.name, ["stop", vm.name])
-                                      else root.action(["start", vm.name])
-                                    }
-                                  }
-                                  IconButton {
                                     text: "terminal"
                                     tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin", "terminal")
                                     accent: root.shellColor("foreground_strong", "#ffffff")
@@ -1143,6 +1132,17 @@ ShellRoot {
                                     accent: root.shellColor("foreground_strong", "#ffffff")
                                     enabled: root.state.connectivity === "connected"
                                     onClicked: realmVmCard.expanded = !realmVmCard.expanded
+                                  }
+                                  IconButton {
+                                    text: vm.state === "running" ? "stop" : "play_arrow"
+                                    tooltip: enabled ? ((vm.state === "running" ? "Gracefully stop " : "Start ") + vm.name) : root.disabledReason(vm, "admin", vm.state === "running" ? "stop" : "start")
+                                    accent: vm.state === "running" ? root.stateColor("transitioning") : root.stateColor("running")
+                                    enabled: vm.state === "running" ? root.canStop(vm) : root.canStart(vm)
+                                    prominent: true
+                                    onClicked: {
+                                      if (vm.state === "running") root.confirmAction("stop:" + vm.name, "Click again to gracefully stop " + vm.name, ["stop", vm.name])
+                                      else root.action(["start", vm.name])
+                                    }
                                   }
                                 }
                               }
