@@ -1230,13 +1230,77 @@ ShellRoot {
                           }
                         }
                       }
+
+                      Rectangle {
+                        visible: root.realmChooserEntries.length > 0 && root.realmChooserRealmId === (realmCard.group.realmId || realmCard.group.realmName)
+                        width: parent.width
+                        height: visible ? inlineChooserContent.implicitHeight + 14 : 0
+                        radius: 10
+                        color: root.shellColor("input_background", "#0d0d0d")
+                        border.color: root.shellColor("border", "#2a2d35")
+                        border.width: 1
+                        clip: true
+                        Rectangle {
+                          x: 0
+                          y: 0
+                          width: 4
+                          height: parent.height
+                          radius: 10
+                          color: root.realmChooserColor
+                        }
+                        Column {
+                          id: inlineChooserContent
+                          x: 10
+                          y: 7
+                          width: parent.width - 17
+                          spacing: 6
+                          Row {
+                            width: parent.width
+                            height: 22
+                            Text {
+                              width: parent.width - 30
+                              color: root.shellColor("foreground_strong", "#ffffff")
+                              font.pixelSize: 12
+                              font.bold: true
+                              elide: Text.ElideRight
+                              text: root.realmChooserTitle
+                            }
+                            IconButton {
+                              text: "close"
+                              tooltip: "Close chooser"
+                              accent: root.shellColor("foreground_strong", "#ffffff")
+                              enabled: true
+                              onClicked: {
+                                root.realmChooserEntries = []
+                                root.realmChooserTitle = ""
+                                root.realmChooserRealmId = ""
+                              }
+                            }
+                          }
+                          Flow {
+                            width: parent.width
+                            spacing: 6
+                            Repeater {
+                              model: root.realmChooserEntries
+                              ControlChip {
+                                icon: modelData.icon
+                                label: modelData.label
+                                tooltip: "Launch " + modelData.canonicalTarget
+                                accent: root.shellColor("muted", "#9399b2")
+                                enabled: root.canMutate()
+                                onClicked: root.launchChosenRealmEntry(modelData)
+                              }
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                 }
               }
 
               Rectangle {
-                visible: root.realmChooserEntries.length > 0
+                visible: false
                 width: list.width
                 height: visible ? chooserContent.implicitHeight + 16 : 0
                 radius: 13
