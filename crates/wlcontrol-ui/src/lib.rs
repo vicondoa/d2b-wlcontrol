@@ -992,7 +992,7 @@ ShellRoot {
                     y: 0
                     width: 5
                     height: parent.height
-                    radius: 13
+                    radius: 0
                     color: modelData.realmColor || root.hostAccentColor()
                   }
 
@@ -1313,7 +1313,7 @@ ShellRoot {
                   y: 0
                   width: 5
                   height: parent.height
-                  radius: 13
+                  radius: 0
                   color: root.realmChooserColor
                 }
 
