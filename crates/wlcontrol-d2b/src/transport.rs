@@ -96,21 +96,36 @@ impl SeqpacketTransport {
     pub(crate) fn recv_payload(&self) -> WlResult<Vec<u8>> {
         wait_for(&self.fd, PollFlags::POLLIN, self.timeout, "receive")?;
         let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
-        let received =
-            recv(self.fd.as_raw_fd(), &mut buffer, MsgFlags::MSG_DONTWAIT).map_err(|err| {
-                if matches!(err, Errno::EAGAIN) {
-                    WlError::Timeout(format!("receive from d2bd after {:?}", self.timeout))
-                } else {
-                    WlError::Io(errno_to_io(err))
-                }
-            })?;
+        let received = recv(
+            self.fd.as_raw_fd(),
+            &mut buffer,
+            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_TRUNC,
+        )
+        .map_err(|err| {
+            if matches!(err, Errno::EAGAIN) {
+                WlError::Timeout(format!("receive from d2bd after {:?}", self.timeout))
+            } else {
+                WlError::Io(errno_to_io(err))
+            }
+        })?;
         if received == 0 {
             return Err(WlError::DaemonDown(
                 "d2bd public socket closed during receive".to_owned(),
             ));
         }
+        Self::reject_truncated_packet(received, buffer.len())?;
         let payload = decode_frame(&buffer[..received])?;
         Ok(payload.to_vec())
+    }
+
+    fn reject_truncated_packet(received: usize, capacity: usize) -> WlResult<()> {
+        if received > capacity {
+            Err(WlError::Protocol(
+                "d2bd public socket packet exceeded the frame bound".to_owned(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -154,4 +169,17 @@ fn connect_io_error(path: &Path, err: io::Error) -> WlError {
 
 fn errno_to_io(errno: Errno) -> io::Error {
     io::Error::from_raw_os_error(errno as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_seqpacket_length_is_rejected_before_slicing() {
+        let error =
+            SeqpacketTransport::reject_truncated_packet(MAX_FRAME_BYTES + 5, MAX_FRAME_BYTES + 4)
+                .expect_err("oversized packet must fail");
+        assert!(matches!(error, WlError::Protocol(_)));
+    }
 }
