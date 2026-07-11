@@ -239,10 +239,6 @@ ShellRoot {
   property bool observabilityEnabled: Quickshell.env("D2B_WLCONTROL_OBSERVABILITY_ENABLED") === "1"
   property string observabilitySuccess: Quickshell.env("D2B_WLCONTROL_OBSERVABILITY_SUCCESS") || "Opened observability portal"
   property var artifactThemeEnv: root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_THEME_JSON"))
-  property var realmChooserEntries: []
-  property string realmChooserTitle: ""
-  property color realmChooserColor: "#89b4fa"
-  property string realmChooserRealmId: ""
   property var collapsedRealms: ({})
 
   function visibleVms() {
@@ -289,12 +285,73 @@ ShellRoot {
 
   function vmsForRealm(group) {
     const workloads = group.workloads || []
-    return root.visibleVms().filter(vm => workloads.some(workload => root.vmMatchesRealmWorkload(vm, workload)))
+    return root.visibleVms().filter(vm => workloads.some(workload => !root.isUnsafeLocal(workload) && root.vmMatchesRealmWorkload(vm, workload)))
   }
 
   function ungroupedVms() {
     const groups = root.realmGroups()
-    return root.visibleVms().filter(vm => !groups.some(group => root.vmsForRealm(group).some(groupVm => groupVm.name === vm.name)))
+    return root.visibleVms().filter(vm =>
+      !groups.some(group => (group.workloads || []).some(workload => root.isUnsafeLocal(workload) && root.vmMatchesRealmWorkload(vm, workload)))
+      && !groups.some(group => root.vmsForRealm(group).some(groupVm => groupVm.name === vm.name)))
+  }
+
+  function isUnsafeLocal(workload) {
+    return workload && (workload.providerKind === "unsafe-local"
+      || (workload.executionPosture && workload.executionPosture.isolation === "unsafe-local"))
+  }
+
+  function realmAllUnsafe(group) {
+    const workloads = group.workloads || []
+    return workloads.length > 0 && workloads.every(workload => root.isUnsafeLocal(workload))
+  }
+
+  function realmMixedIsolation(group) {
+    const workloads = group.workloads || []
+    return workloads.some(workload => root.isUnsafeLocal(workload))
+      && workloads.some(workload => !root.isUnsafeLocal(workload))
+  }
+
+  function providerLabel(workload) {
+    return workload.providerKind || "provider unknown"
+  }
+
+  function availabilityMessage(workload) {
+    if (!workload || workload.availability === "ready") return ""
+    if (workload.availability === "helper-unavailable") return "Helper unavailable — enable and start the d2b unsafe-local user service"
+    if (workload.availability === "helper-stale") return "Helper stale — restart the d2b unsafe-local user service"
+    if (workload.availability === "user-manager-unavailable") return "User manager unavailable — sign in through a graphical PAM session and start systemd --user"
+    if (workload.availability === "graphical-session-inactive") return "Graphical session inactive — sign in to the target Wayland session"
+    if (workload.availability === "wayland-unavailable") return "Wayland unavailable — restore the graphical session"
+    if (workload.availability === "proxy-unavailable") return "Wayland proxy unavailable — restart d2b desktop user services"
+    return "Provider degraded — inspect d2b workload status"
+  }
+
+  function unsafeWarning() {
+    return "No isolation · processes run as your host user · user-manager lifetime"
+  }
+
+  function launcherItemIcon(item) {
+    if (!item || !item.icon) return "apps"
+    return item.icon.name || item.icon.id || "apps"
+  }
+
+  function canLaunchWorkload(workload, item) {
+    return state.connectivity === "connected"
+      && state.role !== "none"
+      && workload.availability === "ready"
+      && (item.type === "exec" || item.type === "shell")
+  }
+
+  function launcherDisabledReason(workload) {
+    const availability = root.availabilityMessage(workload)
+    if (availability.length > 0) return availability
+    if (state.connectivity !== "connected") return state.connectivity === "auth-denied" ? "Authorization denied" : "d2bd is unreachable"
+    if (state.role === "none") return "Requires launcher role"
+    return "Launcher item unavailable"
+  }
+
+  function launchWorkloadItem(workload, item) {
+    action(["workload-launch", workload.canonicalTarget, item.id, item.type])
   }
 
   function runningCount() {
@@ -396,37 +453,6 @@ ShellRoot {
     actionClearTimer.stop()
     actionProc.args = args
     actionProc.exec([backend, "action"].concat(args))
-  }
-
-  function realmLaunchTooltip(group, entry) {
-    const target = entry.canonicalTarget || (entry.workloadName + "." + group.realmName + ".d2b")
-    if (entry.hasIconCollision) return "Choose workload in " + group.realmName
-    return "Launch " + entry.label + " (" + target + ")"
-  }
-
-  function matchingRealmEntries(group, entry) {
-    const entries = group.workloads || []
-    if (!entry.hasIconCollision) return [entry]
-    return entries.filter(candidate => candidate.icon === entry.icon)
-  }
-
-  function launchRealmEntry(group, entry) {
-    if (entry.hasIconCollision) {
-      realmChooserEntries = matchingRealmEntries(group, entry)
-      realmChooserTitle = "Choose workload in " + group.realmName
-      realmChooserColor = group.realmColor || root.hostAccentColor()
-      realmChooserRealmId = group.realmId || group.realmName
-      hoverHint = realmChooserTitle
-      return
-    }
-    action(["realm-workload-launch", group.realmId || group.realmName, entry.actionId, entry.workloadName])
-  }
-
-  function launchChosenRealmEntry(entry) {
-    action(["realm-workload-launch", realmChooserRealmId, entry.actionId, entry.workloadName])
-    realmChooserEntries = []
-    realmChooserTitle = ""
-    realmChooserRealmId = ""
   }
 
   function attachOrPrompt(card, vm, u) {
@@ -624,7 +650,7 @@ ShellRoot {
     if (verb === "audio-off") return "Disabling audio for " + vm + "..."
     if (verb === "terminal") return "Opening terminal in " + vm + "..."
     if (verb === "quick-launch") return "Launching " + (args[2] || "command") + " in " + vm + "..."
-    if (verb === "realm-workload-launch") return "Launching " + (args[3] || args[2] || "workload") + "..."
+    if (verb === "workload-launch") return "Launching " + (args[2] || "workload item") + "..."
     if (verb === "build") return "Building " + vm + "..."
     if (verb === "boot") return "Staging " + vm + " for next boot..."
     if (verb === "switch") return "Switching " + vm + "..."
@@ -649,7 +675,7 @@ ShellRoot {
     if (verb === "audio-off") return "Audio disabled for " + vm
     if (verb === "terminal") return "Terminal launch requested for " + vm
     if (verb === "quick-launch") return "Quick launch requested for " + vm
-    if (verb === "realm-workload-launch") return "Realm workload launch requested for " + (args[3] || args[2] || "workload")
+    if (verb === "workload-launch") return "Workload launch requested for " + (args[2] || "item")
     if (verb === "build") return "Build completed for " + vm
     if (verb === "boot") return "Boot generation staged for " + vm
     if (verb === "switch") return "Switched " + vm
@@ -1027,7 +1053,7 @@ ShellRoot {
                           color: root.shellColor("muted", "#9399b2")
                           font.pixelSize: 10
                           anchors.verticalCenter: parent.verticalCenter
-                          text: root.vmsForRealm(realmCard.group).length + " VM" + (root.vmsForRealm(realmCard.group).length === 1 ? "" : "s")
+                          text: (realmCard.group.workloads || []).length + " workload" + ((realmCard.group.workloads || []).length === 1 ? "" : "s")
                         }
                         IconButton {
                           text: root.isRealmCollapsed(realmCard.group) ? "expand_more" : "expand_less"
@@ -1038,11 +1064,123 @@ ShellRoot {
                         }
                       }
 
+                      Rectangle {
+                        visible: root.realmAllUnsafe(realmCard.group)
+                        width: parent.width
+                        height: visible ? 24 : 0
+                        radius: 8
+                        color: root.shellColor("warning_surface", "#2e2a1a")
+                        border.color: modelData.realmColor || root.stateColor("error")
+                        border.width: 1
+                        Text {
+                          anchors.centerIn: parent
+                          color: modelData.realmColor || root.stateColor("error")
+                          font.pixelSize: 10
+                          font.bold: true
+                          text: "unsafe-local · no isolation · user-manager lifetime"
+                        }
+                      }
+
                       Column {
                         visible: !root.isRealmCollapsed(realmCard.group)
                         height: visible ? implicitHeight : 0
                         width: parent.width
                         spacing: 6
+                        Repeater {
+                          model: realmCard.group.workloads || []
+                          Rectangle {
+                            id: workloadRow
+                            width: parent.width
+                            height: workloadContent.implicitHeight + 14
+                            radius: 10
+                            color: root.shellColor("input_background", "#0d0d0d")
+                            border.color: root.shellColor("border", "#2a2d35")
+                            border.width: 1
+                            property var workload: modelData
+
+                            Column {
+                              id: workloadContent
+                              anchors.left: parent.left
+                              anchors.right: parent.right
+                              anchors.top: parent.top
+                              anchors.margins: 7
+                              spacing: 5
+
+                              Row {
+                                width: parent.width
+                                spacing: 8
+                                Text {
+                                  width: parent.width - (providerText.visible ? providerText.implicitWidth + 10 : 0)
+                                  color: root.shellColor("foreground_strong", "#ffffff")
+                                  font.pixelSize: 13
+                                  font.bold: true
+                                  elide: Text.ElideRight
+                                  text: workloadRow.workload.label || workloadRow.workload.workloadName
+                                }
+                                Text {
+                                  id: providerText
+                                  visible: !root.realmAllUnsafe(realmCard.group)
+                                  color: root.isUnsafeLocal(workloadRow.workload)
+                                    ? (realmCard.group.realmColor || root.stateColor("error"))
+                                    : root.shellColor("muted", "#9399b2")
+                                  font.pixelSize: 10
+                                  font.bold: root.isUnsafeLocal(workloadRow.workload)
+                                  text: root.providerLabel(workloadRow.workload)
+                                }
+                              }
+
+                              Text {
+                                width: parent.width
+                                color: root.shellColor("muted", "#9399b2")
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                                text: workloadRow.workload.canonicalTarget
+                              }
+
+                              Text {
+                                visible: root.realmMixedIsolation(realmCard.group) && root.isUnsafeLocal(workloadRow.workload)
+                                width: parent.width
+                                height: visible ? implicitHeight : 0
+                                color: realmCard.group.realmColor || root.stateColor("error")
+                                font.pixelSize: 10
+                                font.bold: true
+                                wrapMode: Text.WordWrap
+                                text: root.unsafeWarning()
+                              }
+
+                              Text {
+                                visible: root.availabilityMessage(workloadRow.workload).length > 0
+                                width: parent.width
+                                height: visible ? implicitHeight : 0
+                                color: root.stateColor("error")
+                                font.pixelSize: 10
+                                wrapMode: Text.WordWrap
+                                text: root.availabilityMessage(workloadRow.workload)
+                              }
+
+                              Flow {
+                                width: parent.width
+                                spacing: 6
+                                Repeater {
+                                  model: workloadRow.workload.launcherItems || []
+                                  ControlChip {
+                                    icon: root.launcherItemIcon(modelData)
+                                    label: modelData.name
+                                    tooltip: enabled
+                                      ? ("Launch " + modelData.name + " for " + workloadRow.workload.canonicalTarget)
+                                      : root.launcherDisabledReason(workloadRow.workload)
+                                    accent: root.isUnsafeLocal(workloadRow.workload)
+                                      ? (realmCard.group.realmColor || root.hostAccentColor())
+                                      : root.shellColor("foreground_strong", "#ffffff")
+                                    enabled: root.canLaunchWorkload(workloadRow.workload, modelData)
+                                    onClicked: root.launchWorkloadItem(workloadRow.workload, modelData)
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+
                         Repeater {
                           model: root.vmsForRealm(realmCard.group)
                           Rectangle {
@@ -1239,155 +1377,13 @@ ShellRoot {
                         }
                       }
 
-                      Rectangle {
-                        visible: root.realmChooserEntries.length > 0 && root.realmChooserRealmId === (realmCard.group.realmId || realmCard.group.realmName)
-                        width: parent.width
-                        height: visible ? inlineChooserContent.implicitHeight + 14 : 0
-                        radius: 10
-                        color: "transparent"
-                        clip: true
-                        Rectangle {
-                          x: 0
-                          y: 0
-                          width: 4
-                          height: parent.height
-                          radius: 10
-                          color: root.realmChooserColor
-                        }
-                        Rectangle {
-                          x: 4
-                          y: 0
-                          width: parent.width - 4
-                          height: parent.height
-                          radius: 8
-                          color: root.shellColor("input_background", "#0d0d0d")
-                          border.color: root.shellColor("border", "#2a2d35")
-                          border.width: 1
-                        }
-                        Column {
-                          id: inlineChooserContent
-                          x: 10
-                          y: 7
-                          width: parent.width - 17
-                          spacing: 6
-                          Row {
-                            width: parent.width
-                            height: 22
-                            Text {
-                              width: parent.width - 30
-                              color: root.shellColor("foreground_strong", "#ffffff")
-                              font.pixelSize: 12
-                              font.bold: true
-                              elide: Text.ElideRight
-                              text: root.realmChooserTitle
-                            }
-                            IconButton {
-                              text: "close"
-                              tooltip: "Close chooser"
-                              accent: root.shellColor("foreground_strong", "#ffffff")
-                              enabled: true
-                              onClicked: {
-                                root.realmChooserEntries = []
-                                root.realmChooserTitle = ""
-                                root.realmChooserRealmId = ""
-                              }
-                            }
-                          }
-                          Flow {
-                            width: parent.width
-                            spacing: 6
-                            Repeater {
-                              model: root.realmChooserEntries
-                              ControlChip {
-                                icon: modelData.icon
-                                label: modelData.label
-                                tooltip: "Launch " + modelData.canonicalTarget
-                                accent: root.shellColor("muted", "#9399b2")
-                                enabled: root.canMutate()
-                                onClicked: root.launchChosenRealmEntry(modelData)
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-
-              Rectangle {
-                visible: false
-                width: list.width
-                height: visible ? chooserContent.implicitHeight + 16 : 0
-                radius: 13
-                color: root.shellColor("surface", "#16181d")
-                border.color: root.shellColor("border", "#2a2d35")
-                border.width: 1
-                clip: true
-                Rectangle {
-                  x: 0
-                  y: 0
-                  width: 5
-                  height: parent.height
-                  radius: 0
-                  color: root.realmChooserColor
-                }
-
-                Column {
-                  id: chooserContent
-                  anchors.left: parent.left
-                  anchors.right: parent.right
-                  anchors.top: parent.top
-                  anchors.topMargin: 8
-                  anchors.rightMargin: 8
-                  anchors.bottomMargin: 8
-                  anchors.leftMargin: 13
-                  spacing: 7
-
-                  Row {
-                    width: parent.width
-                    height: 24
-                    Text {
-                      width: parent.width - 34
-                      color: root.shellColor("foreground_strong", "#ffffff")
-                      font.pixelSize: 13
-                      font.bold: true
-                      elide: Text.ElideRight
-                      text: root.realmChooserTitle
-                    }
-                    IconButton {
-                      text: "close"
-                      tooltip: "Close chooser"
-                      accent: root.shellColor("foreground_strong", "#ffffff")
-                      enabled: true
-                      onClicked: {
-                        root.realmChooserEntries = []
-                        root.realmChooserTitle = ""
-                        root.realmChooserRealmId = ""
-                      }
-                    }
-                  }
-
-                  Flow {
-                    width: parent.width
-                    spacing: 6
-                    Repeater {
-                      model: root.realmChooserEntries
-                      ControlChip {
-                        icon: modelData.icon
-                        label: modelData.label
-                        tooltip: "Launch " + modelData.canonicalTarget
-                        accent: root.shellColor("muted", "#9399b2")
-                        enabled: root.canMutate()
-                        onClicked: root.launchChosenRealmEntry(modelData)
-                      }
                     }
                   }
                 }
               }
 
               Repeater {
-                model: []
+                model: root.ungroupedVms()
 
                 Rectangle {
                   id: vmCard
@@ -1987,18 +1983,25 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("model: root.realmGroups()"));
         assert!(QML_SOURCE.contains("property var collapsedRealms"));
         assert!(QML_SOURCE.contains("function toggleRealmCollapsed(group)"));
-        assert!(QML_SOURCE.contains("root.vmsForRealm(realmCard.group).length + \" VM\""));
+        assert!(QML_SOURCE.contains("\" workload\""));
         assert!(QML_SOURCE.contains("model: root.vmsForRealm(realmCard.group)"));
-        assert!(QML_SOURCE.contains("model: []"));
-        assert!(QML_SOURCE.contains("function launchRealmEntry(group, entry)"));
-        assert!(QML_SOURCE.contains("Choose workload in "));
-        assert!(!QML_SOURCE.contains("Choose \" + entry.icon"));
-        assert!(QML_SOURCE.contains("property color realmChooserColor"));
+        assert!(QML_SOURCE.contains("model: root.ungroupedVms()"));
+        assert!(QML_SOURCE.contains("model: realmCard.group.workloads || []"));
+        assert!(QML_SOURCE.contains("model: workloadRow.workload.launcherItems || []"));
+        assert!(QML_SOURCE.contains("label: modelData.name"));
+        assert!(QML_SOURCE.contains("icon: root.launcherItemIcon(modelData)"));
+        assert!(QML_SOURCE.contains("function launchWorkloadItem(workload, item)"));
+        assert!(QML_SOURCE
+            .contains("[\"workload-launch\", workload.canonicalTarget, item.id, item.type]"));
+        assert!(QML_SOURCE.contains("function realmAllUnsafe(group)"));
+        assert!(QML_SOURCE.contains("function realmMixedIsolation(group)"));
+        assert!(QML_SOURCE.contains("visible: !root.realmAllUnsafe(realmCard.group)"));
+        assert!(QML_SOURCE.contains("unsafe-local · no isolation · user-manager lifetime"));
+        assert!(QML_SOURCE.contains("Helper unavailable — enable and start"));
+        assert!(QML_SOURCE.contains("User manager unavailable — sign in"));
+        assert!(!QML_SOURCE.contains("realm-workload-launch"));
+        assert!(!QML_SOURCE.contains("realmChooser"));
         assert!(QML_SOURCE.contains("border.color: root.shellColor(\"border\", \"#2a2d35\")"));
-        assert!(QML_SOURCE.contains("color: root.realmChooserColor"));
-        assert!(QML_SOURCE.contains("[\"realm-workload-launch\", group.realmId || group.realmName, entry.actionId, entry.workloadName]"));
-        assert!(QML_SOURCE.contains("root.realmChooserEntries"));
-        assert!(QML_SOURCE.contains("root.launchChosenRealmEntry(modelData)"));
         assert!(QML_SOURCE.contains("function shellColor(name, fallback)"));
         assert!(QML_SOURCE.contains("root.shellColor(\"surface\", \"#16181d\")"));
         assert!(QML_SOURCE.contains("root.shellColor(\"foreground_strong\", \"#ffffff\")"));
@@ -2042,6 +2045,22 @@ mod qml_tests {
             .expect("expanded destructive controls");
         assert!(destructive_start > primary_start);
         assert!(!QML_SOURCE[primary_start..destructive_start].contains("force-stop"));
+        let workload_start = QML_SOURCE.find("id: workloadRow").expect("workload row");
+        let workload_end = QML_SOURCE[workload_start..]
+            .find("model: root.vmsForRealm(realmCard.group)")
+            .map(|offset| workload_start + offset)
+            .expect("VM controls after workload rows");
+        let workload_rows = &QML_SOURCE[workload_start..workload_end];
+        for forbidden in [
+            "store-verify",
+            "usb-attach",
+            "audio-off",
+            "[\"terminal\"",
+            "[\"build\"",
+            "[\"switch\"",
+        ] {
+            assert!(!workload_rows.contains(forbidden), "{forbidden}");
+        }
         assert!(!QML_SOURCE.contains("import QtQuick.Controls"));
     }
 }

@@ -1,6 +1,6 @@
 use wlcontrol_core::model::{
     ActionKind, AuthRole, Connectivity, RealmGroup, RealmLauncherEntry, RuntimeState, Unavailable,
-    UsbClaim, Vm, WlState,
+    UsbClaim, Vm, WlState, WorkloadAvailability,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +21,8 @@ pub(crate) struct RealmQuickLaunchGroup {
     pub(crate) realm_color: String,
     /// Workload entries within this realm, ready for button rendering.
     pub(crate) entries: Vec<RealmLauncherEntry>,
+    pub(crate) all_unsafe_local: bool,
+    pub(crate) mixed_isolation: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,9 +55,8 @@ pub(crate) fn visible_vm_groups(state: &WlState, show_internal: bool) -> Vec<VmG
 
 /// Return realm quick-launch groups for the wlcontrol panel.
 ///
-/// Groups come from `state.realm_groups` which is populated by the reducer
-/// when `Config::launcher_metadata_path` resolves a valid artifact.
-/// Returns an empty vec when no realm launcher metadata is available.
+/// Groups come from `state.realm_groups`, populated from d2b's public workload
+/// inventory. Returns an empty vec when that operation is unavailable or empty.
 pub(crate) fn visible_realm_quick_launch_groups(state: &WlState) -> Vec<RealmQuickLaunchGroup> {
     state
         .realm_groups
@@ -66,8 +67,37 @@ pub(crate) fn visible_realm_quick_launch_groups(state: &WlState) -> Vec<RealmQui
             realm_id: g.realm_id.clone(),
             realm_color: g.realm_color.clone(),
             entries: g.workloads.clone(),
+            all_unsafe_local: g.all_unsafe_local(),
+            mixed_isolation: g.has_mixed_isolation(),
         })
         .collect()
+}
+
+pub(crate) fn workload_warning(
+    group: &RealmGroup,
+    workload: &RealmLauncherEntry,
+) -> Option<&'static str> {
+    if workload.is_unsafe_local() && group.has_mixed_isolation() {
+        workload.warning()
+    } else {
+        None
+    }
+}
+
+pub(crate) fn realm_warning(group: &RealmGroup) -> Option<&'static str> {
+    group
+        .all_unsafe_local()
+        .then_some("unsafe-local · no isolation · user-manager lifetime")
+}
+
+pub(crate) fn workload_availability_message(workload: &RealmLauncherEntry) -> Option<&'static str> {
+    (workload.availability != WorkloadAvailability::Ready)
+        .then(|| workload.availability.remediation())
+        .flatten()
+}
+
+pub(crate) fn workload_vm_controls_hidden(workload: &RealmLauncherEntry) -> bool {
+    workload.is_unsafe_local()
 }
 
 pub(crate) fn state_badge(state: RuntimeState) -> BadgeSpec {
@@ -140,6 +170,9 @@ pub(crate) fn action_label(action: &ActionKind) -> String {
             workload_name,
             ..
         } => format!("Launch {workload_name} ({realm_id})"),
+        ActionKind::WorkloadLaunch {
+            target, item_id, ..
+        } => format!("Launch {item_id} ({target})"),
     }
 }
 
@@ -182,7 +215,8 @@ pub(crate) fn action_vm_name(action: &ActionKind) -> Option<&str> {
         | ActionKind::OpenControlCenter
         | ActionKind::OpenObservability
         | ActionKind::CycleDisplay
-        | ActionKind::RealmWorkloadLaunch { .. } => None,
+        | ActionKind::RealmWorkloadLaunch { .. }
+        | ActionKind::WorkloadLaunch { .. } => None,
     }
 }
 
@@ -259,7 +293,10 @@ pub(crate) fn empty_group_message(show_internal: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wlcontrol_core::model::{VmFeatures, WlState};
+    use wlcontrol_core::model::{
+        IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary, VmFeatures, WlState,
+        WorkloadExecutionPosture, WorkloadProviderKind,
+    };
 
     fn vm(name: &str, env: Option<&str>, state: RuntimeState) -> Vm {
         Vm {
@@ -277,6 +314,66 @@ mod tests {
             usb: vec![],
             audio: None,
             quick_launch: vec![],
+        }
+    }
+
+    fn workload(
+        name: &str,
+        provider_kind: WorkloadProviderKind,
+        availability: WorkloadAvailability,
+    ) -> RealmLauncherEntry {
+        RealmLauncherEntry {
+            workload_name: name.to_owned(),
+            label: format!("{name} tools"),
+            canonical_target: format!("{name}.work.d2b"),
+            realm_name: "work".to_owned(),
+            realm_id: "work".to_owned(),
+            provider_kind,
+            availability,
+            execution_posture: WorkloadExecutionPosture {
+                isolation: if provider_kind == WorkloadProviderKind::UnsafeLocal {
+                    IsolationPosture::UnsafeLocal
+                } else {
+                    IsolationPosture::VirtualMachine
+                },
+                ..Default::default()
+            },
+            launcher_items: vec![
+                LauncherItemSummary {
+                    id: "firefox".to_owned(),
+                    name: "Firefox".to_owned(),
+                    icon: LauncherIcon {
+                        id: Some("firefox".to_owned()),
+                        name: Some("web-browser".to_owned()),
+                    },
+                    kind: LauncherItemKind::Exec,
+                    graphical: true,
+                    capabilities: vec!["configured-launch".to_owned()],
+                },
+                LauncherItemSummary {
+                    id: "openobserve".to_owned(),
+                    name: "OpenObserve".to_owned(),
+                    icon: LauncherIcon {
+                        id: Some("openobserve".to_owned()),
+                        name: Some("monitoring".to_owned()),
+                    },
+                    kind: LauncherItemKind::Exec,
+                    graphical: true,
+                    capabilities: vec!["configured-launch".to_owned()],
+                },
+                LauncherItemSummary {
+                    id: "terminal".to_owned(),
+                    name: "Terminal".to_owned(),
+                    icon: LauncherIcon {
+                        id: None,
+                        name: Some("terminal".to_owned()),
+                    },
+                    kind: LauncherItemKind::Shell,
+                    graphical: false,
+                    capabilities: vec!["persistent-shell".to_owned()],
+                },
+            ],
+            ..Default::default()
         }
     }
 
@@ -522,6 +619,7 @@ mod tests {
             legacy_vm_name: Some("corp-browser".to_owned()),
             has_icon_collision: false,
             icon_siblings: vec![],
+            ..Default::default()
         };
         let state = WlState {
             realm_groups: vec![RealmGroup {
@@ -541,6 +639,8 @@ mod tests {
         assert_eq!(g.entries.len(), 1);
         assert_eq!(g.entries[0].action_id, "corp-browser");
         assert!(!g.entries[0].has_icon_collision);
+        assert!(!g.all_unsafe_local);
+        assert!(!g.mixed_isolation);
     }
 
     #[test]
@@ -558,6 +658,78 @@ mod tests {
         };
         let groups = visible_realm_quick_launch_groups(&state);
         assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn unsafe_local_warning_is_card_level_when_all_rows_are_unsafe() {
+        let group = RealmGroup {
+            realm_name: "work".to_owned(),
+            realm_id: "work".to_owned(),
+            realm_color: "#ff8080".to_owned(),
+            workloads: vec![
+                workload(
+                    "tools",
+                    WorkloadProviderKind::UnsafeLocal,
+                    WorkloadAvailability::Ready,
+                ),
+                workload(
+                    "terminal",
+                    WorkloadProviderKind::UnsafeLocal,
+                    WorkloadAvailability::Ready,
+                ),
+            ],
+        };
+        assert_eq!(
+            realm_warning(&group),
+            Some("unsafe-local · no isolation · user-manager lifetime")
+        );
+        assert_eq!(workload_warning(&group, &group.workloads[0]), None);
+        assert!(workload_vm_controls_hidden(&group.workloads[0]));
+    }
+
+    #[test]
+    fn unsafe_local_warning_is_row_level_for_mixed_cards() {
+        let unsafe_local = workload(
+            "tools",
+            WorkloadProviderKind::UnsafeLocal,
+            WorkloadAvailability::Ready,
+        );
+        let isolated = workload(
+            "builder",
+            WorkloadProviderKind::LocalVm,
+            WorkloadAvailability::Ready,
+        );
+        let group = RealmGroup {
+            realm_name: "work".to_owned(),
+            realm_id: "work".to_owned(),
+            realm_color: "#ff8080".to_owned(),
+            workloads: vec![unsafe_local, isolated],
+        };
+        assert_eq!(realm_warning(&group), None);
+        assert!(workload_warning(&group, &group.workloads[0])
+            .expect("unsafe row warning")
+            .contains("No isolation"));
+        assert_eq!(workload_warning(&group, &group.workloads[1]), None);
+        assert!(!workload_vm_controls_hidden(&group.workloads[1]));
+    }
+
+    #[test]
+    fn helper_remediation_and_generic_items_are_preserved() {
+        let target = workload(
+            "tools",
+            WorkloadProviderKind::UnsafeLocal,
+            WorkloadAvailability::HelperUnavailable,
+        );
+        assert!(workload_availability_message(&target)
+            .expect("helper remediation")
+            .contains("enable and start"));
+        assert_eq!(target.launcher_items[0].name, "Firefox");
+        assert_eq!(target.launcher_items[0].icon.preferred(), "web-browser");
+        assert_eq!(target.launcher_items[0].kind, LauncherItemKind::Exec);
+        assert_eq!(target.launcher_items[1].name, "OpenObserve");
+        assert_eq!(target.launcher_items[1].kind, LauncherItemKind::Exec);
+        assert_eq!(target.launcher_items[2].name, "Terminal");
+        assert_eq!(target.launcher_items[2].kind, LauncherItemKind::Shell);
     }
 
     #[test]

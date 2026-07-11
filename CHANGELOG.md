@@ -1,147 +1,59 @@
 # Changelog
 
-All notable changes to `d2b-wlcontrol` are documented here. The
-format follows [Keep a Changelog](https://keepachangelog.com/) and the
-project adheres to [Semantic Versioning](https://semver.org/).
+All notable changes to `d2b-wlcontrol` are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
+[Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-11
+
 ### Added
 
-- **Realm-grouped quick-launch panel.** The wlcontrol panel now groups
-  workload launcher buttons by realm. Each group's outer/group border uses
-  the realm's accent color sourced from `ui-colors.json` (env accent for
-  the matching realm name) or the d2b palette hash. Inner workload borders
-  use default/theme styling. When multiple workloads in the same realm
-  share the same icon, the button is annotated as a chooser entry so the
-  UI can present a disambiguation dialog.
-- **`realm-workloads-launcher.json` consumption.** The reducer now reads
-  d2b's generated launcher metadata artifact and populates
-  `WlState::realm_groups` with typed `RealmGroup` / `RealmLauncherEntry`
-  models. The path defaults to `/etc/d2b/realm-workloads-launcher.json`
-  and can be overridden via `launcher_metadata_path` in config.
-- **`RealmWorkloadLaunch` action.** A new `ActionKind::RealmWorkloadLaunch`
-  dispatches `d2b realm workload launch --realm <id> <action_id>` for
-  realm-native workload activation. Requires launcher role.
-- **Waybar tooltip realm section.** When realm groups are present, the
-  Waybar tooltip includes a `— realm launchers —` section listing each
-  realm's icon buttons grouped by realm color, with icon-collision entries
-  annotated with `↕N` (chooser required).
+- Added public workload inventory/status support with canonical targets,
+  provider kind, structured execution/isolation posture, availability,
+  forward-compatible capability tokens, and generic configured launcher items.
+- Added first-class unsafe-local realm rows with explicit no-isolation and
+  user-manager-lifetime warnings plus actionable helper, graphical-session,
+  Wayland, and proxy remediation.
+- Added generic exec dispatch through `d2b launch <target> --item <id>` and
+  persistent-shell dispatch through configurable wlterm argv using the canonical
+  target.
+- Added a host `homeManagerModules.default` that installs wlcontrol, renders its
+  configuration, injects the self-looping Waybar module and CSS, preserves
+  placement/click/icon/label/module overrides, and supports launcher-item
+  presentation overrides.
+- Added fixture, fake-daemon, reducer/planner, view-model/QML, Waybar golden,
+  and Nix evaluation coverage for unsafe/mixed cards, first-class local VMs,
+  generic exec/shell items, unknown capabilities, launch errors, and readiness
+  remediation.
 
 ### Changed
 
-- **Chooser wording.** Duplicate launcher disambiguation now says
-  `Choose workload in <realm>` instead of exposing icon names such as
-  `language`.
-- **Realm color source.** Realm launcher cards now prefer first-class
-  `ui-colors.json` realm accents over transition env accents so colors match
-  Waybar, wlterm, clip-picker, and Wayland rails.
-- **Chooser frame.** Duplicate launcher chooser cards now use a stronger
-  realm-colored outer border and subtle realm-tinted background.
-- **Realm card rail.** Realm cards now use a rounded color rail and include
-  their backing VMs as neutral inner rows; each realm can collapse down to just
-  the realm name and VM count. Compact VM rows include start/stop, terminal, and
-  configured quick-launch buttons, while expansion shows advanced VM controls in
-  place instead of a separate bottom VM section.
-- **Realm-aware VM identity.** The reduced VM model now carries d2b-provided
-  canonical realm targets when available and falls back to `<vm>.local.d2b` for
-  local VMs, so desktop surfaces can distinguish trusted d2b identity from
-  guest-provided app ids/titles.
-- **Packaging documentation.** Installation and configuration docs now include
-  exact `d2b-toolkit` flake follow boilerplate for hosts that co-install d2b
-  desktop companions.
-- **Shared toolkit integration.** Public-socket framing, hello negotiation DTOs,
-  broker-socket refusal, Waybar JSON serialization, color validation, and
-  process-argv redaction now use shared d2b toolkit crates without changing the
-  CLI, Waybar, or popup UX.
-- **Portable toolkit input.** The flake now consumes `d2b-toolkit` from a GitHub
-  flake input with `nixpkgs` following the caller instead of a developer-local
-  absolute path.
+- Replaced private launcher-artifact consumption and VM-shaped realm launcher
+  assumptions with d2b-toolkit 0.2 public workload contracts.
+- Realm cards now render every configured item from its item-owned name and icon;
+  browsers and observability tools are ordinary exec items.
+- Unsafe-local rows now omit VM lifecycle, build/boot/switch, store, USB, audio,
+  VM terminal, quick-launch, and arbitrary guest-exec controls.
+- Waybar retains its continuous newline-JSON contract and bounded labels/classes;
+  unsafe posture can add only stable `unsafe-local` and `mixed-isolation`
+  classes.
+- Realm, VM, and state accents continue to use d2b UI metadata while the neutral
+  popup palette remains independently configurable and Stylix-agnostic.
+- Updated package, workspace, flake, and toolkit integration versions to 0.2.0.
+- Public-socket receive handling rejects oversized `SOCK_SEQPACKET` packets
+  before frame decoding instead of accepting a truncated packet, and retries
+  interrupted or spuriously awakened packet reads and writes against one
+  absolute deadline. Interrupted and backlog-saturated non-blocking connects
+  enter the same bounded completion path.
+- The Home Manager module now omits generated Waybar module and stylesheet
+  files when `programs.d2b-wlcontrol.waybar.enable` is false.
 
-### Fixed
+### Security
 
-- **Audio control visual polish.** The Quickshell popup now renders
-  high-contrast audio chips, a prominent hot-mic warning badge, and more
-  legible disabled/destructive controls in expanded VM cards.
-- **Fast VM lifecycle.** Start and Restart actions now send d2bd
-  `noWaitApi=true`, so the control surface returns success once the VM process
-  is supervised and lets the normal status refresh show api-ready/readiness
-  convergence later.
-- **Fast status refresh.** `status-json` now consumes d2b's unfiltered
-  daemon status read model in one public-socket request instead of running
-  per-VM status and deep USB probe calls during UI refresh.
-- **Force shutdown affordance.** The Quickshell popup keeps force shutdown out
-  of the primary VM button, scaffolds it only inside ellipsis-expanded controls
-  with destructive styling and strong two-click confirmation, and distinguishes
-  graceful Stop messaging from force-stop messaging while the d2b
-  force-stop contract lands.
-- **d2bd refresh timeout.** Raised the default public-socket operation
-  timeout to tolerate slower full-host status refreshes without reporting
-  `daemon-down` while d2b status probes settle.
-- **Quickshell VM card colors.** VM card borders again use d2b's per-VM
-  active border colors, and the old environment-colored left stripe is gone.
-- **d2b-only popup accents.** The Quickshell popup keeps its neutral
-  black/white/gray shell colors, but no longer ships its own colored accent
-  palette; if d2b does not provide a valid color artifact, affected colored
-  accent/border surfaces render without color.
-- **Quickshell popup placement.** The popup now opens with a larger top/right
-  margin and more header icon spacing so it reads as intentionally placed on
-  niri instead of stuck to the screen edge.
-- **Waybar CSS color references.** Updated the starter stylesheet and docs
-  to consume d2b's generated GTK `@define-color` names
-  (`@d2b_state_*`) instead of legacy CSS custom properties.
-
-### Added
-
-- **Configurable popup palette.** The Quickshell popup now accepts a
-  Stylix-agnostic `[theme]` palette for neutral shell colors while keeping d2b
-  state, environment, and VM-border accents sourced from d2b's UI artifact.
-- **d2b audio controls.** The public-socket client now consumes d2b
-  `AudioStatus` and dispatches daemon-native audio mutations for microphone
-  toggle, speaker toggle, speaker volume, microphone gain, and all-audio-off
-  without touching broker or root-owned audio state files. The Quickshell popup
-  shows per-VM audio state behind expanded controls, preserves levels across
-  mute toggles, sends slider changes on commit, and marks host-only,
-  unsupported, degraded, or provider-misconfigured entries inline.
-- **Workspace and contract.** Rust workspace with `wlcontrol-core`
-  (domain model, config, reducer, action planner), `wlcontrol-d2b`
-  (public-socket client), `wlcontrol-waybar` (custom-module renderer),
-  `wlcontrol-ui` (Quickshell layer-shell frontend), and `wlcontrol-cli`
-  (the `d2b-wlcontrol` binary).
-- **Live d2bd client.** Direct public-socket client speaking the
-  non-abstract `SOCK_SEQPACKET` protocol: hello/version negotiation,
-  4-byte little-endian length-prefixed JSON framing, typed responses,
-  and translation of `auth status` / `list` / `status` / `usb probe`
-  into a reduced control-surface state. A configured broker socket path
-  is refused, and a mid-refresh failure degrades to daemon-down rather
-  than reporting a false-healthy view.
-- **Reduced state model.** Source-precedence reducer
-  (`list` -> `status` -> `usb probe` -> `auth status`) with net-VM
-  detection, favorites ordering, hidden-VM filtering, and
-  inconsistency -> attention mapping.
-- **Waybar module.** Continuous custom JSON module with compact and
-  detail display modes, state-driven CSS classes, a rich per-VM tooltip
-  (env, state, pending-restart, USB ownership), signal-driven refresh
-  (`SIGRTMIN+8`), non-overlapping refresh, daemon-down backoff, and
-  persisted display mode.
-- **Quickshell control popup.** Top-right layer-shell popup with
-  per-env VM cards, one-click show/hide behavior, Material-style action
-  icons, first-class USB attach/detach chips, and auth-gated controls
-  for start/stop/restart, terminal launch, switch, and store verify.
-- **Control popup refinements.** The popup now uses a centered `d2b`
-  heading, can be dragged after opening, fits its VM list up to a half-screen
-  cap with a thin scrollbar, sorts `sys-*` VMs to the bottom, shows
-  human-readable action feedback, exposes verify/build/boot/switch as
-  icon-only system controls, supports config-driven per-VM quick-launch icons,
-  launches guest terminals via detached exec, and adds a Signoz observability
-  URL button without auto-login handling.
-- **d2b color artifacts.** Waybar CSS imports
-  `/etc/d2b/ui-colors.css`, and the Quickshell popup consumes parsed
-  state, env, and VM border colors from the d2b UI color artifact.
-- **Safety model.** Public socket only (never the broker socket), no
-  `sudo`, no d2b state-file mutation, argv-only command execution,
-  and authorization derived from `d2b auth status`.
-- **Packaging and docs.** Nix flake (package/app/devShell with
-  Quickshell + Material Symbols), CI gate, starter Waybar config + CSS,
-  `AGENTS.md`, and the configuration / controls / Waybar / niri /
-  security documentation set.
+- Removed all launcher reads from root-owned/private d2b files and kept workload
+  operations on the authenticated public socket or exact official CLI/wlterm
+  argv boundaries.
+- Unsafe-local presentation now states that identity rails are not isolation and
+  refuses misleading VM-shaped controls.

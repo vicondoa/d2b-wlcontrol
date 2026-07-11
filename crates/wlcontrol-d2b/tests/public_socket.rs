@@ -17,7 +17,11 @@ use nix::sys::socket::{
 };
 use serde_json::{json, Value};
 use wlcontrol_core::{
-    model::{AudioChannel, AuthRole, Connectivity, RuntimeState, SocketIntent},
+    model::{
+        AudioChannel, AuthRole, Connectivity, EnvironmentPosture, IsolationPosture,
+        LauncherItemKind, RuntimeState, SessionPersistencePosture, SocketIntent,
+        WorkloadAvailability, WorkloadProviderKind,
+    },
     Config, WlError,
 };
 use wlcontrol_d2b::{wire, D2bClient};
@@ -53,6 +57,79 @@ fn refresh_populates_reduce_input_from_public_socket() {
     assert!(usb.claims[0].bound);
     assert_eq!(usb.claims[0].owner_vm.as_deref(), Some("corp-vm"));
 
+    server.join();
+}
+
+#[test]
+fn refresh_consumes_toolkit_public_workload_fixture() {
+    let server = FakeD2bd::start(FakeMode::RefreshWithWorkloads);
+    let input = client_for(server.path()).refresh();
+    let workloads = input.workloads.expect("public workload inventory");
+    assert_eq!(workloads.workloads.len(), 1);
+    let workload = &workloads.workloads[0];
+    assert_eq!(workload.canonical_target, "tools.host.d2b");
+    assert_eq!(workload.provider_kind, WorkloadProviderKind::UnsafeLocal);
+    assert_eq!(
+        workload.execution_posture.isolation,
+        IsolationPosture::UnsafeLocal
+    );
+    assert_eq!(
+        workload.execution_posture.environment,
+        EnvironmentPosture::SystemdUserManagerAmbient
+    );
+    assert_eq!(
+        workload.execution_posture.session_persistence,
+        SessionPersistencePosture::UserManagerLifetime
+    );
+    assert_eq!(
+        workload.availability,
+        WorkloadAvailability::HelperUnavailable
+    );
+    assert!(workload
+        .capabilities
+        .contains(&"future-desktop-capability".to_owned()));
+    assert_eq!(workload.launcher_items[0].name, "Firefox");
+    assert_eq!(workload.launcher_items[0].kind, LauncherItemKind::Exec);
+    assert_eq!(workload.launcher_items[1].name, "Terminal");
+    assert_eq!(workload.launcher_items[1].kind, LauncherItemKind::Shell);
+    server.join();
+}
+
+#[test]
+fn workload_status_accepts_first_class_local_vm_without_legacy_name() {
+    let server = FakeD2bd::start(FakeMode::WorkloadStatus);
+    let workload = client_for(server.path())
+        .workload_status("builder.dev.d2b")
+        .expect("workload status");
+    assert_eq!(workload.provider_kind, WorkloadProviderKind::LocalVm);
+    assert_eq!(workload.legacy_vm_name, None);
+    assert_eq!(workload.canonical_target, "builder.dev.d2b");
+    assert_eq!(
+        workload.execution_posture.isolation,
+        IsolationPosture::VirtualMachine
+    );
+    server.join();
+}
+
+#[test]
+fn public_workload_errors_preserve_actionable_remediation() {
+    let server = FakeD2bd::start(FakeMode::WorkloadError);
+    let error = client_for(server.path())
+        .workload_inventory()
+        .expect_err("workload error");
+    assert!(matches!(error, WlError::D2b(ref message)
+            if message.contains("helper-unavailable") && message.contains("start the user helper")));
+    server.join();
+}
+
+#[test]
+fn configured_launch_errors_preserve_actionable_remediation() {
+    let server = FakeD2bd::start(FakeMode::WorkloadLaunchError);
+    let error = client_for(server.path())
+        .launcher_exec("tools.host.d2b", "firefox", "launch-42")
+        .expect_err("configured launch error");
+    assert!(matches!(error, WlError::D2b(ref message)
+            if message.contains("helper-unavailable") && message.contains("restart the user helper")));
     server.join();
 }
 
@@ -584,6 +661,7 @@ impl ExpectedError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FakeMode {
     Refresh,
+    RefreshWithWorkloads,
     RefreshWithAudio,
     RefreshWithAudioError,
     RejectHello,
@@ -617,6 +695,9 @@ enum FakeMode {
     InvalidJson,
     LengthMismatchFrame,
     OversizedFrame,
+    WorkloadStatus,
+    WorkloadError,
+    WorkloadLaunchError,
 }
 
 impl FakeMode {
@@ -668,6 +749,10 @@ fn serve(listener: OwnedFd, mode: FakeMode) {
         for expected in ["authStatus", "status"] {
             serve_connection(&listener, mode, Some(expected));
         }
+    } else if mode == FakeMode::RefreshWithWorkloads {
+        for expected in ["authStatus", "status", "audio", "workload"] {
+            serve_connection(&listener, mode, Some(expected));
+        }
     } else if matches!(
         mode,
         FakeMode::RefreshWithAudio | FakeMode::RefreshWithAudioError
@@ -697,7 +782,13 @@ fn serve_connection(listener: &OwnedFd, mode: FakeMode, expected_request: Option
     );
     assert_eq!(
         hello.get("supportedFeatures"),
-        Some(&json!(["typed-errors", "export-broker-audit"]))
+        Some(&json!([
+            "typed-errors",
+            "export-broker-audit",
+            "configured-launch-v1",
+            "unsafe-local-provider-v1",
+            "unsafe-local-shell-v1"
+        ]))
     );
 
     if matches!(mode, FakeMode::RejectHello) {
@@ -724,7 +815,13 @@ fn serve_connection(listener: &OwnedFd, mode: FakeMode, expected_request: Option
             "type": "helloOk",
             "serverVersion": "0.4.0",
             "selectedVersion": "0.4.0",
-            "capabilities": ["typed-errors", "export-broker-audit"]
+            "capabilities": [
+                "typed-errors",
+                "export-broker-audit",
+                "configured-launch-v1",
+                "unsafe-local-provider-v1",
+                "unsafe-local-shell-v1"
+            ]
         }),
     ) {
         if mode.allows_early_client_close() && err.kind() == io::ErrorKind::BrokenPipe {
@@ -1012,6 +1109,36 @@ fn assert_request_shape(request: &Value, request_type: &str, mode: FakeMode) {
                 })
             ),
         },
+        "workload" => match mode {
+            FakeMode::WorkloadStatus => assert_eq!(
+                request,
+                &json!({
+                    "type": "workload",
+                    "op": "status",
+                    "args": { "target": "builder.dev.d2b" }
+                })
+            ),
+            FakeMode::WorkloadLaunchError => assert_eq!(
+                request,
+                &json!({
+                    "type": "workload",
+                    "op": "launcherExec",
+                    "args": {
+                        "target": "tools.host.d2b",
+                        "itemId": "firefox",
+                        "operationId": "launch-42"
+                    }
+                })
+            ),
+            _ => assert_eq!(
+                request,
+                &json!({
+                    "type": "workload",
+                    "op": "list",
+                    "args": {}
+                })
+            ),
+        },
         other => panic!("unexpected request type {other}"),
     }
 }
@@ -1019,7 +1146,10 @@ fn assert_request_shape(request: &Value, request_type: &str, mode: FakeMode) {
 fn response_for(mode: FakeMode, request_type: &str) -> Value {
     match (mode, request_type) {
         (
-            FakeMode::Refresh | FakeMode::RefreshWithAudio | FakeMode::RefreshWithAudioError,
+            FakeMode::Refresh
+            | FakeMode::RefreshWithWorkloads
+            | FakeMode::RefreshWithAudio
+            | FakeMode::RefreshWithAudioError,
             "authStatus",
         ) => json!({
             "type": "authStatusResponse",
@@ -1029,7 +1159,10 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
             "sockets": []
         }),
         (
-            FakeMode::Refresh | FakeMode::RefreshWithAudio | FakeMode::RefreshWithAudioError,
+            FakeMode::Refresh
+            | FakeMode::RefreshWithWorkloads
+            | FakeMode::RefreshWithAudio
+            | FakeMode::RefreshWithAudioError,
             "list",
         ) => json!({
             "type": "listResponse",
@@ -1051,7 +1184,7 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
                 "vm": "corp-vm"
             }]
         }),
-        (FakeMode::Refresh, "status") => status_response(false),
+        (FakeMode::Refresh | FakeMode::RefreshWithWorkloads, "status") => status_response(false),
         (FakeMode::RefreshWithAudio | FakeMode::RefreshWithAudioError, "status") => {
             status_response(true)
         }
@@ -1079,6 +1212,34 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
                     "kind": "provider-misconfigured",
                     "remediation": "start guestd"
                 }]
+            }
+        }),
+        (FakeMode::RefreshWithWorkloads, "audio") => json!({
+            "type": "audioOpResponse",
+            "op": "status",
+            "result": {
+                "entries": [],
+                "errors": []
+            }
+        }),
+        (FakeMode::RefreshWithWorkloads, "workload") => unsafe_local_workload_fixture(),
+        (FakeMode::WorkloadStatus, "workload") => first_class_local_vm_status_fixture(),
+        (FakeMode::WorkloadError, "workload") => json!({
+            "type": "error",
+            "error": {
+                "kind": "helper-unavailable",
+                "exitCode": 69,
+                "message": "configured launch helper is unavailable",
+                "remediation": "start the user helper"
+            }
+        }),
+        (FakeMode::WorkloadLaunchError, "workload") => json!({
+            "type": "error",
+            "error": {
+                "kind": "helper-unavailable",
+                "exitCode": 69,
+                "message": "configured launch helper is stale",
+                "remediation": "restart the user helper"
             }
         }),
         (FakeMode::Refresh, "usbipProbe") => json!({
@@ -1171,6 +1332,27 @@ fn response_for(mode: FakeMode, request_type: &str) -> Value {
     }
 }
 
+fn unsafe_local_workload_fixture() -> Value {
+    serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-workload-v3-v1/unsafe-local-list-response.json"
+    ))
+    .expect("unsafe-local toolkit fixture")
+}
+
+fn first_class_local_vm_status_fixture() -> Value {
+    let list: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/public-workload-v3-v1/first-class-local-vm-list-response.json"
+    ))
+    .expect("first-class local VM toolkit fixture");
+    json!({
+        "type": "workloadResponse",
+        "op": "status",
+        "result": {
+            "workload": list["result"]["workloads"][0].clone()
+        }
+    })
+}
+
 fn mutating_response(outcome: &str, summary: &str, remediation: &str) -> Value {
     let mut value = json!({
         "type": "mutatingVerbResponse",
@@ -1219,7 +1401,13 @@ fn send_hello_then_close(path: &Path) {
         json!({
             "type": "hello",
             "clientVersion": ">=0.4.0, <0.5.0",
-            "supportedFeatures": ["typed-errors", "export-broker-audit"]
+            "supportedFeatures": [
+                "typed-errors",
+                "export-broker-audit",
+                "configured-launch-v1",
+                "unsafe-local-provider-v1",
+                "unsafe-local-shell-v1"
+            ]
         }),
     )
     .expect("send hello");

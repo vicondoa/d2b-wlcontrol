@@ -5,13 +5,12 @@
 //! dependency direction one-way (`wlcontrol-d2b` → `wlcontrol-core`) means
 //! the reducer never needs to know about d2b wire types: the protocol
 //! client translates raw d2b JSON into these neutral fragments.
-//!
-//! Owning wave: Wave 0 (integrator). Wave 1 agents extend as needed.
 
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AuthRole, Connectivity, RuntimeState, UsbClaim, VmAudioState, VmCapabilities, VmFeatures,
+    AuthRole, Connectivity, RealmLauncherEntry, RuntimeState, UsbClaim, VmAudioState,
+    VmCapabilities, VmFeatures,
 };
 
 /// One declared VM as reported by `d2b list`.
@@ -99,6 +98,13 @@ pub struct Auth {
     pub role: AuthRole,
 }
 
+/// Public workload inventory returned by d2b's workload operation family.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkloadInventory {
+    pub workloads: Vec<RealmLauncherEntry>,
+}
+
 /// The full bundle of fragments the reducer consumes for one refresh cycle.
 ///
 /// Any field may be `None` when the corresponding call failed; the reducer is
@@ -119,4 +125,6 @@ pub struct ReduceInput {
     pub usb: Option<UsbProbe>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workloads: Option<WorkloadInventory>,
 }

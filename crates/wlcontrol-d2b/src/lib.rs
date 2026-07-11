@@ -1,9 +1,5 @@
 //! Direct d2bd public-socket client.
 //!
-//! Owning wave: **Wave 1 — Protocol client agent**. Wave 0 fixes the public
-//! API surface (this module's signatures) so the Waybar / GTK / CLI crates can
-//! build against a stable seam. The Wave 1 agent implements the real protocol:
-//!
 //! - connect to the non-abstract `SOCK_SEQPACKET` socket at the configured path;
 //! - send the `Hello` negotiation frame and enforce the selected version range;
 //! - length-prefix (4-byte little-endian) every JSON request frame;
@@ -18,19 +14,34 @@ use std::{path::Path, time::Duration};
 
 use d2b_client::ensure_allowed_socket;
 use d2b_toolkit_core::{
-    Hello, HelloFrame, HelloOk, HelloRejected, HelloRejectedReason, HelloResponse,
-    KnownFeatureFlag, SemverRange, SocketClass,
+    CapabilitySet as ToolkitCapabilitySet,
+    DisplayEnvironmentPosture as ToolkitDisplayEnvironmentPosture,
+    EnvironmentPosture as ToolkitEnvironmentPosture,
+    ExecutionIdentityPosture as ToolkitExecutionIdentityPosture, Hello, HelloFrame, HelloOk,
+    HelloRejected, HelloRejectedReason, HelloResponse, IsolationPosture as ToolkitIsolationPosture,
+    KnownFeatureFlag, LauncherExecArgs, LauncherItemKind as ToolkitLauncherItemKind, OperationId,
+    ProtocolToken, PublicRequest, PublicResponse, SemverRange,
+    SessionPersistencePosture as ToolkitSessionPersistencePosture, SocketClass,
+    WorkloadAvailability as ToolkitWorkloadAvailability,
+    WorkloadExecutionPosture as ToolkitWorkloadExecutionPosture, WorkloadListArgs, WorkloadOp,
+    WorkloadOpResponse, WorkloadProviderKind as ToolkitWorkloadProviderKind,
+    WorkloadPublicSummary as ToolkitWorkloadPublicSummary, WorkloadState as ToolkitWorkloadState,
+    WorkloadStatusArgs, WorkloadTarget,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use wlcontrol_core::error::{WlError, WlResult};
 use wlcontrol_core::model::{
     AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioProviderKind, AuthRole,
-    Connectivity, RuntimeState, SocketIntent, UsbClaim, VmAudioState, VmCapabilities, VmFeatures,
+    Connectivity, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
+    IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary, RealmLauncherEntry,
+    RuntimeState, SessionPersistencePosture, SocketIntent, UsbClaim, VmAudioState, VmCapabilities,
+    VmFeatures, WorkloadAvailability, WorkloadExecutionPosture, WorkloadProviderKind,
+    WorkloadRuntimeState,
 };
 use wlcontrol_core::sources::{
     AudioStatus, AudioStatusEntry, AudioStatusError, Auth, Inventory, InventoryVm, ReduceInput,
-    UsbProbe, VmStatus,
+    UsbProbe, VmStatus, WorkloadInventory,
 };
 use wlcontrol_core::Config;
 
@@ -106,6 +117,7 @@ impl D2bClient {
         // probe calls on the UI refresh path.
         let status = self.request(request_status_model)?;
         let audio = self.request(request_audio_status).ok();
+        let workloads = self.workload_inventory().ok();
 
         Ok(ReduceInput {
             connectivity: Connectivity::Connected,
@@ -114,7 +126,36 @@ impl D2bClient {
             statuses: status.statuses,
             usb: Some(status.usb),
             audio,
+            workloads,
         })
+    }
+
+    /// Read the public configured-workload inventory.
+    pub fn workload_inventory(&self) -> WlResult<WorkloadInventory> {
+        self.request(request_workload_inventory)
+    }
+
+    /// Read one canonical public workload status.
+    pub fn workload_status(&self, target: &str) -> WlResult<RealmLauncherEntry> {
+        let target = WorkloadTarget::parse(target)
+            .map_err(|error| WlError::Config(format!("invalid workload target: {error}")))?;
+        self.request(|transport| request_workload_status(transport, target))
+    }
+
+    /// Execute a configured public launcher item with a caller-stable operation ID.
+    pub fn launcher_exec(
+        &self,
+        target: &str,
+        item_id: &str,
+        operation_id: &str,
+    ) -> WlResult<DispatchOutcome> {
+        let target = WorkloadTarget::parse(target)
+            .map_err(|error| WlError::Config(format!("invalid workload target: {error}")))?;
+        let item_id = ProtocolToken::parse(item_id)
+            .map_err(|error| WlError::Config(format!("invalid launcher item: {error}")))?;
+        let operation_id = OperationId::parse(operation_id)
+            .map_err(|error| WlError::Config(format!("invalid operation id: {error}")))?;
+        self.request(|transport| request_launcher_exec(transport, target, item_id, operation_id))
     }
 
     /// Dispatch a single typed socket intent (`vm start`, `usb attach`, ...).
@@ -483,12 +524,282 @@ fn request_value(transport: &SeqpacketTransport, payload: Vec<u8>) -> WlResult<V
     Ok(value)
 }
 
+fn request_workload_inventory(transport: &SeqpacketTransport) -> WlResult<WorkloadInventory> {
+    match request_workload_op(transport, WorkloadOp::List(WorkloadListArgs::inventory()))? {
+        WorkloadOpResponse::List(result) => Ok(WorkloadInventory {
+            workloads: result
+                .workloads
+                .into_iter()
+                .map(workload_from_toolkit)
+                .collect(),
+        }),
+        _ => Err(WlError::Protocol(
+            "d2bd returned the wrong public workload response".to_owned(),
+        )),
+    }
+}
+
+fn request_workload_status(
+    transport: &SeqpacketTransport,
+    target: WorkloadTarget,
+) -> WlResult<RealmLauncherEntry> {
+    let expected_target = target.clone();
+    match request_workload_op(transport, WorkloadOp::Status(WorkloadStatusArgs { target }))? {
+        WorkloadOpResponse::Status(result)
+            if result.workload.identity.canonical_target == expected_target =>
+        {
+            Ok(workload_from_toolkit(result.workload))
+        }
+        WorkloadOpResponse::Status(_) => Err(WlError::Protocol(
+            "d2bd workload status target did not match the request".to_owned(),
+        )),
+        _ => Err(WlError::Protocol(
+            "d2bd returned the wrong public workload response".to_owned(),
+        )),
+    }
+}
+
+fn request_launcher_exec(
+    transport: &SeqpacketTransport,
+    target: WorkloadTarget,
+    item_id: ProtocolToken,
+    operation_id: OperationId,
+) -> WlResult<DispatchOutcome> {
+    let expected_target = target.clone();
+    let expected_item_id = item_id.clone();
+    let expected_operation_id = operation_id.clone();
+    match request_workload_op(
+        transport,
+        WorkloadOp::LauncherExec(LauncherExecArgs {
+            target,
+            item_id,
+            operation_id,
+        }),
+    )? {
+        WorkloadOpResponse::LauncherExec(result)
+            if result.target == expected_target
+                && result.item_id == expected_item_id
+                && result.operation_id == expected_operation_id =>
+        {
+            Ok(DispatchOutcome {
+                summary: format!(
+                    "configured launch {}",
+                    result.disposition.metrics_label_value()
+                ),
+            })
+        }
+        WorkloadOpResponse::LauncherExec(_) => Err(WlError::Protocol(
+            "d2bd configured launch response did not match the request".to_owned(),
+        )),
+        _ => Err(WlError::Protocol(
+            "d2bd returned the wrong public workload response".to_owned(),
+        )),
+    }
+}
+
+fn request_workload_op(
+    transport: &SeqpacketTransport,
+    op: WorkloadOp,
+) -> WlResult<WorkloadOpResponse> {
+    let request = PublicRequest::workload(None, op);
+    transport.send_payload(&serde_json::to_vec(&request)?)?;
+    let response: PublicResponse = serde_json::from_slice(&transport.recv_payload()?)
+        .map_err(|error| WlError::Protocol(format!("invalid workload JSON from d2bd: {error}")))?;
+    match response {
+        PublicResponse::Workload { response, .. } => Ok(response),
+        PublicResponse::Error { error, .. } => Err(WlError::D2b(format!(
+            "{}: {}; {}",
+            error.kind, error.message, error.remediation
+        ))),
+        PublicResponse::Shell { .. } => Err(WlError::Protocol(
+            "d2bd returned a shell response to a workload request".to_owned(),
+        )),
+    }
+}
+
+fn workload_from_toolkit(workload: ToolkitWorkloadPublicSummary) -> RealmLauncherEntry {
+    let launcher_items = workload
+        .launcher_items
+        .iter()
+        .map(|item| LauncherItemSummary {
+            id: item.id.as_str().to_owned(),
+            name: item.name.clone(),
+            icon: LauncherIcon {
+                id: item.icon.id().map(str::to_owned),
+                name: item.icon.name().map(str::to_owned),
+            },
+            kind: launcher_kind_from_toolkit(item.kind),
+            graphical: item.graphical,
+            capabilities: capability_tokens(&item.capabilities),
+        })
+        .collect::<Vec<_>>();
+    let presentation_item = workload
+        .default_item_id
+        .as_ref()
+        .and_then(|default| {
+            workload
+                .launcher_items
+                .iter()
+                .find(|item| item.id == *default)
+        })
+        .or_else(|| workload.launcher_items.first());
+    let workload_name = workload.identity.workload_id.as_str().to_owned();
+    let label = workload
+        .identity
+        .workload_name
+        .clone()
+        .unwrap_or_else(|| workload_name.clone());
+    let action_id = workload
+        .default_item_id
+        .as_ref()
+        .map(|item| item.as_str().to_owned())
+        .or_else(|| launcher_items.first().map(|item| item.id.clone()))
+        .unwrap_or_else(|| workload_name.clone());
+    let icon = presentation_item
+        .and_then(|item| item.icon.name().or_else(|| item.icon.id()))
+        .unwrap_or("apps")
+        .to_owned();
+
+    RealmLauncherEntry {
+        action_id,
+        workload_name,
+        label,
+        icon,
+        canonical_target: workload.identity.canonical_target.as_str().to_owned(),
+        legacy_vm_name: workload
+            .identity
+            .legacy_vm_name
+            .as_ref()
+            .map(|name| name.as_str().to_owned()),
+        has_icon_collision: false,
+        icon_siblings: Vec::new(),
+        realm_name: workload.identity.realm_id.as_str().to_owned(),
+        realm_id: workload.identity.realm_id.as_str().to_owned(),
+        provider_kind: provider_kind_from_toolkit(workload.provider_kind),
+        execution_posture: execution_posture_from_toolkit(&workload.execution_posture),
+        availability: availability_from_toolkit(workload.availability),
+        workload_state: workload_state_from_toolkit(workload.state),
+        capabilities: capability_tokens(&workload.capabilities),
+        launcher_items,
+        default_item_id: workload
+            .default_item_id
+            .as_ref()
+            .map(|item| item.as_str().to_owned()),
+    }
+}
+
+fn capability_tokens(capabilities: &ToolkitCapabilitySet) -> Vec<String> {
+    let mut tokens = capabilities
+        .iter()
+        .map(|capability| capability.code().to_owned())
+        .chain(
+            capabilities
+                .unknown_iter()
+                .map(|token| token.as_str().to_owned()),
+        )
+        .collect::<Vec<_>>();
+    tokens.sort();
+    tokens
+}
+
+fn provider_kind_from_toolkit(kind: ToolkitWorkloadProviderKind) -> WorkloadProviderKind {
+    match kind {
+        ToolkitWorkloadProviderKind::LocalVm => WorkloadProviderKind::LocalVm,
+        ToolkitWorkloadProviderKind::QemuMedia => WorkloadProviderKind::QemuMedia,
+        ToolkitWorkloadProviderKind::ProviderManaged => WorkloadProviderKind::ProviderManaged,
+        ToolkitWorkloadProviderKind::UnsafeLocal => WorkloadProviderKind::UnsafeLocal,
+    }
+}
+
+fn execution_posture_from_toolkit(
+    posture: &ToolkitWorkloadExecutionPosture,
+) -> WorkloadExecutionPosture {
+    WorkloadExecutionPosture {
+        isolation: match posture.isolation {
+            ToolkitIsolationPosture::VirtualMachine => IsolationPosture::VirtualMachine,
+            ToolkitIsolationPosture::ProviderManaged => IsolationPosture::ProviderManaged,
+            ToolkitIsolationPosture::UnsafeLocal => IsolationPosture::UnsafeLocal,
+        },
+        environment: match posture.environment {
+            ToolkitEnvironmentPosture::RuntimeManaged => EnvironmentPosture::RuntimeManaged,
+            ToolkitEnvironmentPosture::SystemdUserManagerAmbient => {
+                EnvironmentPosture::SystemdUserManagerAmbient
+            }
+        },
+        display_environment: match posture.display_environment {
+            ToolkitDisplayEnvironmentPosture::RuntimeManaged => {
+                DisplayEnvironmentPosture::RuntimeManaged
+            }
+            ToolkitDisplayEnvironmentPosture::WaylandProxyOnly => {
+                DisplayEnvironmentPosture::WaylandProxyOnly
+            }
+            ToolkitDisplayEnvironmentPosture::NotApplicable => {
+                DisplayEnvironmentPosture::NotApplicable
+            }
+        },
+        execution_identity: match posture.execution_identity {
+            ToolkitExecutionIdentityPosture::WorkloadUser => ExecutionIdentityPosture::WorkloadUser,
+            ToolkitExecutionIdentityPosture::ProviderManaged => {
+                ExecutionIdentityPosture::ProviderManaged
+            }
+            ToolkitExecutionIdentityPosture::AuthenticatedRequesterUid => {
+                ExecutionIdentityPosture::AuthenticatedRequesterUid
+            }
+        },
+        session_persistence: match posture.session_persistence {
+            ToolkitSessionPersistencePosture::RuntimeManaged => {
+                SessionPersistencePosture::RuntimeManaged
+            }
+            ToolkitSessionPersistencePosture::UserManagerLifetime => {
+                SessionPersistencePosture::UserManagerLifetime
+            }
+        },
+    }
+}
+
+fn availability_from_toolkit(availability: ToolkitWorkloadAvailability) -> WorkloadAvailability {
+    match availability {
+        ToolkitWorkloadAvailability::Ready => WorkloadAvailability::Ready,
+        ToolkitWorkloadAvailability::HelperUnavailable => WorkloadAvailability::HelperUnavailable,
+        ToolkitWorkloadAvailability::HelperStale => WorkloadAvailability::HelperStale,
+        ToolkitWorkloadAvailability::UserManagerUnavailable => {
+            WorkloadAvailability::UserManagerUnavailable
+        }
+        ToolkitWorkloadAvailability::GraphicalSessionInactive => {
+            WorkloadAvailability::GraphicalSessionInactive
+        }
+        ToolkitWorkloadAvailability::WaylandUnavailable => WorkloadAvailability::WaylandUnavailable,
+        ToolkitWorkloadAvailability::ProxyUnavailable => WorkloadAvailability::ProxyUnavailable,
+        ToolkitWorkloadAvailability::Degraded => WorkloadAvailability::Degraded,
+    }
+}
+
+fn workload_state_from_toolkit(state: ToolkitWorkloadState) -> WorkloadRuntimeState {
+    match state {
+        ToolkitWorkloadState::Stopped => WorkloadRuntimeState::Stopped,
+        ToolkitWorkloadState::Starting => WorkloadRuntimeState::Starting,
+        ToolkitWorkloadState::Running => WorkloadRuntimeState::Running,
+        ToolkitWorkloadState::Stopping => WorkloadRuntimeState::Stopping,
+        ToolkitWorkloadState::Failed => WorkloadRuntimeState::Failed,
+    }
+}
+
+fn launcher_kind_from_toolkit(kind: ToolkitLauncherItemKind) -> LauncherItemKind {
+    match kind {
+        ToolkitLauncherItemKind::Exec => LauncherItemKind::Exec,
+        ToolkitLauncherItemKind::Shell => LauncherItemKind::Shell,
+    }
+}
+
 fn hello_frame() -> WlResult<Vec<u8>> {
     let payload = HelloFrame::new(Hello {
         client_version: SemverRange::new(CLIENT_VERSION_RANGE),
         supported_features: vec![
             KnownFeatureFlag::TypedErrors.wire_value(),
             KnownFeatureFlag::ExportBrokerAudit.wire_value(),
+            KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
+            KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
+            KnownFeatureFlag::UnsafeLocalShellV1.wire_value(),
         ],
     });
     serde_json::to_vec(&payload).map_err(WlError::from)

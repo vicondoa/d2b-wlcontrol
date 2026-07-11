@@ -16,12 +16,12 @@ tailored to this repo.
 ## What this is
 
 `d2b-wlcontrol` is a clean, Waybar-styled indicator and control
-center for [d2b](https://github.com/vicondoa/d2b) microVMs,
-built for a niri / Wayland desktop. It shows which VMs are running and
-their status, and exposes the controls a d2b operator can already
-drive: lifecycle (start / stop / restart / switch), USB attach/detach,
-launching a terminal into a VM, store verification, and d2b daemon-native
-audio controls (mic/speaker toggles plus speaker volume / mic gain).
+center for [d2b](https://github.com/vicondoa/d2b) workloads,
+built for a niri / Wayland desktop. It consumes d2bd's public workload
+inventory/status (canonical identity, provider, execution/isolation posture,
+availability, and configured launcher items) while preserving local-VM
+lifecycle, USB, terminal, storage, build/switch, and daemon-native audio
+controls.
 
 It is **not** a d2b replacement, a VM manager, or a privileged
 tool. It is a thin, memory-safe (Rust) presentation + control surface
@@ -35,8 +35,10 @@ surface:
 - the d2bd public socket `/run/d2b/public.sock` (non-abstract
   `SOCK_SEQPACKET`, 4-byte little-endian length-prefixed JSON frames,
   `SO_PEERCRED` auth); and
-- where a CLI boundary is genuinely better UX (detached guest terminal exec or
-  non-shell build), the official `d2b` CLI; and
+- where a CLI boundary is genuinely better UX (configured launch, detached
+  guest terminal exec, or non-shell build), the official `d2b` CLI; and
+- `d2b-wlterm` for typed persistent-shell items addressed by canonical
+  workload target; and
 - for observability, the configured browser opener.
 
 It MUST NEVER:
@@ -45,6 +47,7 @@ It MUST NEVER:
 - use `sudo` or otherwise escalate privilege;
 - read or write d2b's root-owned state files directly (for
   example `/var/lib/d2b/vms/<vm>/state/audio-state.json`);
+- read private launcher artifacts or connect to unsafe-local helper sockets;
 - construct commands as shell strings (always argv vectors);
 - assume capabilities from filesystem permissions instead of
   `d2b auth status`.
@@ -60,6 +63,7 @@ These are hard rules. See "Don'ts" below.
 ├── CHANGELOG.md              <- Keep a Changelog, entries under `## Unreleased`
 ├── LICENSE                   <- Apache-2.0
 ├── flake.nix / flake.lock    <- package, app, devShell
+├── nix/home-manager.nix      <- host package + Waybar integration module
 ├── Cargo.toml                <- Rust workspace
 ├── rust-toolchain.toml       <- pinned toolchain (1.94.1)
 ├── crates/
@@ -84,8 +88,8 @@ types belong in `wlcontrol-core` (see "The core contract").
 `crates/wlcontrol-core/src/model.rs` is the **frozen cross-crate
 contract**. Every other crate builds against it:
 
-- `wlcontrol-d2b` produces `WlState` / source fragments from the
-  socket.
+- `wlcontrol-d2b` produces `WlState` / source fragments from VM and public
+  workload operations on the socket.
 - `wlcontrol-waybar` and `wlcontrol-ui` render `WlState`.
 - `wlcontrol-cli` dispatches `PlannedAction`.
 
@@ -220,6 +224,12 @@ skip the gate unless the doc describes load-bearing behavior.
   on fallible paths. Remove dead code as you touch an area.
 - **Commands are argv, never shell.** Use `std::process::Command` with
   explicit args. No shell interpolation, ever.
+- **Configured workload launch.** Exec items use exact
+  `d2b launch <target> --item <id>` argv; shell items use the configured
+  wlterm argv with canonical target, never VM exec.
+- **Unsafe-local controls.** Show configured items, provider/readiness, and
+  warnings only. Never render VM lifecycle/build/switch/storage/USB/audio or
+  arbitrary guest-exec controls for an unsafe-local row.
 - **Auth-aware controls.** Gate every mutating control on
   `d2b auth status` role, not on guesswork.
 - **Waybar output.** One newline-terminated JSON object per update;
@@ -262,6 +272,9 @@ to.
 - **Don't use `sudo`** or any privilege escalation.
 - **Don't read/write d2b's root-owned state files** directly;
   drive everything through the public socket or the `d2b` CLI.
+- **Don't read private launcher artifacts or helper state/sockets.** Workload
+  identity, items, provider posture, and readiness come from the public
+  workload operation.
 - **Don't build commands as shell strings.** argv vectors only.
 - **Don't infer authorization from filesystem permissions** — use
   `d2b auth status`.
@@ -276,11 +289,18 @@ to.
 ## References
 
 - [README.md](./README.md) — user-facing intro + install.
-- [docs/configuration.md](./docs/configuration.md) — config surface.
-- [docs/controls.md](./docs/controls.md) — action matrix + auth gating.
-- [docs/waybar.md](./docs/waybar.md) — Waybar module JSON + CSS.
-- [docs/niri.md](./docs/niri.md) — niri / layer-shell Wayland notes.
-- [docs/security.md](./docs/security.md) — trust boundary + command safety.
+- [docs/reference/configuration.md](./docs/reference/configuration.md) — config
+  surface.
+- [docs/reference/controls.md](./docs/reference/controls.md) — action matrix +
+  auth gating.
+- [docs/how-to/configure-waybar.md](./docs/how-to/configure-waybar.md) — Waybar
+  module JSON + CSS.
+- [docs/how-to/configure-niri.md](./docs/how-to/configure-niri.md) — niri /
+  layer-shell Wayland notes.
+- [docs/explanation/security.md](./docs/explanation/security.md) — trust
+  boundary + command safety.
+- [docs/how-to/troubleshooting.md](./docs/how-to/troubleshooting.md) — public
+  workload, helper, shell, Wayland, and Waybar remediation.
 - [d2b `docs/reference/daemon-api.md`](https://github.com/vicondoa/d2b/blob/main/docs/reference/daemon-api.md)
   — the public-socket wire contract this client speaks.
 - [d2b `docs/reference/cli-contract.md`](https://github.com/vicondoa/d2b/blob/main/docs/reference/cli-contract.md)
