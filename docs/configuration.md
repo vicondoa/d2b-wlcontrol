@@ -1,43 +1,30 @@
 # Configuration
 
-`d2b-wlcontrol` reads TOML from
-`${XDG_CONFIG_HOME:-~/.config}/d2b-wlcontrol/config.toml`. The file
-is optional — every setting has a sane default. A present-but-malformed
-file is a hard error (so you notice typos) rather than a silent
-fallback to defaults.
-
-## Example
+`d2b-wlcontrol` reads
+`${XDG_CONFIG_HOME:-~/.config}/d2b-wlcontrol/config.toml`. A missing file uses
+defaults; a malformed file is an error.
 
 ```toml
-# Path to the d2bd public socket.
 public_socket = "/run/d2b/public.sock"
-
-# Waybar refresh cadence (ms) and per-operation timeout (ms).
 refresh_interval_ms = 2500
 command_timeout_ms = 10000
-
-# Hide framework net VMs (sys-*-net) from the compact surfaces.
 hide_net_vms = true
-
-# Show the pending-restart marker.
 show_pending_restart = true
+favorites = ["builder"]
+hidden_vms = []
 
 [terminal]
-# Guest terminal command as an ARGV VECTOR (never a shell string). wlcontrol
-# runs `d2b vm exec -d <vm> -- ${guest_argv...}`.
+# Existing per-VM guest-terminal control.
 guest_argv = ["/run/current-system/sw/bin/foot"]
 
-[observability]
-# Signoz URL to open. Auto-login is intentionally deferred; the browser's
-# existing session is used if one exists.
-enabled = true
-url = "http://sys-obs:8080"
-browser_argv = ["xdg-open"]
+# Persistent-shell launcher used by public `shell` items.
+wlterm_argv = ["d2b-wlterm", "open"]
+
+[waybar]
+icon = "◆"
+label = ""
 
 [theme]
-# Generic shell palette for the Quickshell popup. This is intentionally
-# independent of any specific theming system; Nix/Home Manager/Stylix users can
-# render their chosen palette into these normalized #rrggbb fields.
 background = "#0f1117"
 surface = "#16181d"
 surface_alt = "#2a2d35"
@@ -53,126 +40,110 @@ error_surface = "#2e1a1a"
 input_background = "#0d0d0d"
 slider_track = "#252832"
 
-[[quick_launch]]
-id = "run-openterface"
-vm = "work-ssd"
-icon = "desktop_windows"
-tooltip = "Run Openterface"
-guest_argv = ["/run/current-system/sw/bin/openterface-run"]
+[[launcher_overrides]]
+target = "tools.host.d2b"
+item_id = "firefox"
+name = "Web"
+icon = "language"
 ```
 
-## Options
+## Public workload launchers
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `public_socket` | string | `/run/d2b/public.sock` | d2bd public socket path. |
-| `refresh_interval_ms` | integer | `2500` | Waybar poll cadence. |
-| `command_timeout_ms` | integer | `10000` | Per-operation deadline. |
-| `hide_net_vms` | bool | `true` | Hide `sys-*-net` VMs from compact views. |
-| `show_pending_restart` | bool | `true` | Surface the pending-restart marker. |
-| `favorites` | array of string | `[]` | VM names pinned first, in the given order. |
-| `hidden_vms` | array of string | `[]` | VM names hidden from compact surfaces. |
-| `terminal.guest_argv` | array of string | `["/run/current-system/sw/bin/foot"]` | Guest terminal argv launched detached inside the VM. |
-| `terminal.guest_shell` | string | `bash` | Legacy fallback used only if `terminal.guest_argv = []`. |
-| `observability.enabled` | bool | `true` | Whether to show/use the observability portal action. |
-| `observability.url` | string | `http://sys-obs:8080` | Signoz portal URL opened by the header button. |
-| `observability.browser_argv` | array of string | `["xdg-open"]` | Browser/open command prefix for `observability.url`. |
-| `theme.*` | `#rrggbb` string | see example | Stylix-agnostic Quickshell shell palette fields. |
-| `quick_launch[]` | table array | `[]` | Per-VM custom quick-launch icon. Fields: `id`, `vm`, `icon`, `tooltip`, `guest_argv`. |
+Workload identity, provider/posture, readiness, and configured launch items are
+read from d2bd's public workload operation. There is no launcher artifact path
+option. Each public item supplies its own `name`, icon, and typed `exec` or
+`shell` kind.
 
-## Terminal command is argv, not a shell string
+`[[launcher_overrides]]` changes presentation only. It is keyed by canonical
+target plus item ID and may replace `name` and/or `icon`; dispatch still uses the
+public target and item ID. Do not use overrides to invent undeclared commands.
 
-The terminal command is always an **argv vector**. `d2b-wlcontrol`
-spawns the official `d2b` CLI directly (via `execvp`-style process
-spawning) as `d2b vm exec -d <vm> -- ${terminal.guest_argv...}`. There is no
-shell, so VM names and guest argv elements can never be interpreted as shell
-metacharacters. Use absolute guest paths where possible because guest-control
-exec does not resolve a host shell for you.
+Exec items run through exact argv:
 
-Common guest terminal commands:
+```text
+d2b launch <canonical-target> --item <item-id>
+```
+
+Shell items append the canonical target and item ID to
+`terminal.wlterm_argv`:
+
+```text
+d2b-wlterm open <canonical-target> <item-id>
+```
+
+This is the persistent-shell/wlterm path, not `d2b vm exec`.
+
+## Legacy per-VM controls
+
+`terminal.guest_argv` and `[[quick_launch]]` remain available for ordinary local
+VM cards:
 
 ```toml
-guest_argv = ["/run/current-system/sw/bin/foot"]
-guest_argv = ["/run/current-system/sw/bin/ghostty"]
+[[quick_launch]]
+id = "run-tool"
+vm = "builder"
+icon = "construction"
+tooltip = "Run tool"
+guest_argv = ["/run/current-system/sw/bin/tool"]
 ```
 
-This is separate from `d2b-wlterm`. Use `d2b-wlterm` when you want a host
-launcher for persistent named shells; use `terminal.guest_argv` here when the
-popup should start a detached command inside the VM through `d2b vm exec`.
+These argv vectors are never shell strings. Unsafe-local workload rows never
+receive these VM/guest-exec controls.
 
-An empty terminal command is rejected at config load, and a `public_socket`
-pointing at the privileged broker socket (`priv.sock`) is refused — the control
-surface speaks only the public socket. Socket classification uses the shared
-d2b toolkit guard, so custom paths named `priv.sock` are rejected before any
-connection attempt.
+## Colors
 
-## Flake input alignment
+The `[theme]` table is a Stylix-agnostic neutral shell palette. Values must be
+normalized lowercase `#rrggbb`. d2b state, realm, and VM accents still come
+from the configured public UI color artifact (`/etc/d2b/ui-colors.json` by
+default). Realm accents prefer first-class realm metadata, then matching
+environment metadata, then the deterministic d2b palette.
 
-Use one `nixpkgs` and one `d2b-toolkit` input when installing multiple desktop
-companions:
+## Host Home Manager module
 
 ```nix
 {
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  imports = [ inputs.d2b-wlcontrol.homeManagerModules.default ];
 
-    d2b = {
-      url = "github:vicondoa/d2b";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+  programs.d2b-wlcontrol = {
+    enable = true;
+    publicSocketPath = "/run/d2b/public.sock";
 
-    d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    launcherOverrides = [
+      {
+        target = "tools.host.d2b";
+        itemId = "firefox";
+        name = "Web";
+        icon = "language";
+      }
+    ];
 
-    d2b-wlcontrol = {
-      url = "github:vicondoa/d2b-wlcontrol";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.d2b-toolkit.follows = "d2b-toolkit";
-    };
-
-    d2b-wlterm = {
-      url = "github:vicondoa/d2b-wlterm";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.d2b-toolkit.follows = "d2b-toolkit";
+    waybar = {
+      enable = true;
+      barName = "mainBar";
+      modulesList = "modules-right";
+      icon = "◆";
+      label = "d2b";
+      clickAction = "d2b-wlcontrol open";
+      module = {
+        "on-click-right" = "d2b-wlcontrol action cycle-display";
+      };
     };
   };
 }
 ```
 
-The package build rewrites local Cargo path dependencies through the packaged
-toolkit source, so the flake lock selects the exact public-socket and Waybar
-helper revision used by the control binary.
+The module writes the TOML, installs the package and CSS, injects the module at
+the selected position, and leaves arbitrary raw TOML/Waybar overrides available
+through `settings` and `waybar.module`. It never imports d2b's guest Home
+Manager module.
 
-## Observability opens a URL only
+## Input alignment
 
-The observability button opens `observability.url` with
-`observability.browser_argv`. Set `observability.enabled = false` to disable the
-button/action. It does not read Signoz credentials, generate cookies, or perform
-auto-login; if your browser is already logged in, that session is reused by the
-browser.
+The flake pins d2b-toolkit release `v0.2.0` at
+`fde6af8b842718e7150f5056d4eba73093d4ad77`. Consumers composing desktop
+companions should keep one toolkit revision:
 
-## Quickshell popup palette
-
-The `[theme]` table controls only neutral shell colors for the popup: panel
-backgrounds, card surfaces, text, muted text, borders, and input/slider fills.
-d2b-owned state, environment, and VM-border accents still come from d2b's
-generated UI color artifact. Theme values must be normalized lowercase
-`#rrggbb` strings so errors are caught at config load instead of silently
-falling back. The validator uses the shared d2b Wayland color parser and then
-requires the normalized lowercase rendering, so shorthand, uppercase, and alpha
-forms remain invalid for this palette.
-
-This palette does not configure host VM application window borders. wlcontrol
-still reads d2b's generated UI artifact and uses d2b state/accent/VM colors in
-its own status and control UX. For apps running from graphics VMs through d2b's
-Wayland proxy, VM identity borders are drawn by `d2b-wayland-proxy` from d2b's
-`d2b.vms.<vm>.ui.border.*` model.
-
-## Per-VM quick-launch icons
-
-`[[quick_launch]]` entries add custom icon buttons to the always-visible icon
-row before USB controls. Each entry is VM-scoped and launches a detached guest
-command with `d2b vm exec -d <vm> -- ${guest_argv...}`. `icon` is a Material
-Symbols name and `tooltip` is the hover text.
+```nix
+inputs.d2b-wlcontrol.inputs.d2b-toolkit.follows = "d2b-toolkit";
+inputs.d2b-wlterm.inputs.d2b-toolkit.follows = "d2b-toolkit";
+```

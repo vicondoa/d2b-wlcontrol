@@ -1,14 +1,10 @@
 //! Action availability gating and argv/intent planning.
-//!
-//! Owning wave: **Wave 1 — Core model agent**. Wave 0 ships a working baseline
-//! covering role gating, daemon-down gating, and argv-only terminal planning.
-//! The Wave 1 agent extends per-action VM-state rules, USB ownership rules, and
-//! the full advanced-controls matrix from the plan.
 
 use crate::config::Config;
 use crate::model::{
     ActionAvailability, ActionKind, AudioChannel, AudioEnforcementPosture, AuthRole, Connectivity,
-    PlannedAction, RuntimeState, SocketIntent, Unavailable, Vm, WlState,
+    LauncherItemKind, PlannedAction, RealmLauncherEntry, RuntimeState, SocketIntent, Unavailable,
+    Vm, WlState, WorkloadAvailability,
 };
 
 /// Returns `Some(reason)` when `action` cannot currently be invoked.
@@ -29,6 +25,13 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
     let required = required_role(action);
     if !role_satisfies(state.role, required) {
         return Some(Unavailable::InsufficientRole { required });
+    }
+    if let Some(vm) = action_target_vm(action) {
+        if unsafe_local_workload_for_vm(state, vm).is_some() {
+            return Some(Unavailable::Blocked {
+                detail: "unsafe-local workloads expose launcher items only; there is no VM isolation or VM control surface".into(),
+            });
+        }
     }
     if let Some(reason) = capability_block(action, state) {
         return Some(reason);
@@ -74,8 +77,55 @@ pub fn block_reason(action: &ActionKind, state: &WlState) -> Option<Unavailable>
         | ActionKind::AudioMicGain { vm, .. }
         | ActionKind::AudioOff { vm } => audio_block(state, vm),
         ActionKind::StoreVerify { .. } | ActionKind::Build { .. } | ActionKind::Boot { .. } => None,
-        ActionKind::RealmWorkloadLaunch { .. } => None,
+        ActionKind::RealmWorkloadLaunch { .. } => Some(Unavailable::Blocked {
+            detail:
+                "legacy realm launcher actions are unavailable; refresh public workload inventory"
+                    .into(),
+        }),
+        ActionKind::WorkloadLaunch {
+            target,
+            item_id,
+            item_kind,
+        } => workload_launch_block(state, target, item_id, *item_kind),
         _ => None,
+    }
+}
+
+fn workload_launch_block(
+    state: &WlState,
+    target: &str,
+    item_id: &str,
+    item_kind: LauncherItemKind,
+) -> Option<Unavailable> {
+    let Some(workload) = workload_by_target(state, target) else {
+        return Some(Unavailable::Blocked {
+            detail: "workload is not present in the public inventory".into(),
+        });
+    };
+    let Some(item) = workload
+        .launcher_items
+        .iter()
+        .find(|item| item.id == item_id)
+    else {
+        return Some(Unavailable::Blocked {
+            detail: "launcher item is not present in the public inventory".into(),
+        });
+    };
+    if item.kind != item_kind || item_kind == LauncherItemKind::Unknown {
+        return Some(Unavailable::Blocked {
+            detail: "launcher item kind does not match the public inventory".into(),
+        });
+    }
+    if workload.availability == WorkloadAvailability::Ready {
+        None
+    } else {
+        Some(Unavailable::Blocked {
+            detail: workload
+                .availability
+                .remediation()
+                .unwrap_or("Workload is unavailable.")
+                .to_owned(),
+        })
     }
 }
 
@@ -131,7 +181,8 @@ fn action_target_vm(action: &ActionKind) -> Option<&str> {
         | ActionKind::OpenControlCenter
         | ActionKind::OpenObservability
         | ActionKind::CycleDisplay
-        | ActionKind::RealmWorkloadLaunch { .. } => None,
+        | ActionKind::RealmWorkloadLaunch { .. }
+        | ActionKind::WorkloadLaunch { .. } => None,
     }
 }
 
@@ -260,11 +311,16 @@ pub fn plan(
                 detail: "handled in-process; not a d2b dispatch".into(),
             });
         }
-        ActionKind::RealmWorkloadLaunch {
-            realm_id,
-            action_id,
-            ..
-        } => realm_workload_launch_argv(realm_id, action_id),
+        ActionKind::RealmWorkloadLaunch { .. } => {
+            return Err(Unavailable::Blocked {
+                detail: "legacy realm launcher actions are unavailable".into(),
+            })
+        }
+        ActionKind::WorkloadLaunch {
+            target,
+            item_id,
+            item_kind,
+        } => workload_launch_argv(target, item_id, *item_kind, config),
     };
     Ok(dispatch)
 }
@@ -280,7 +336,12 @@ fn availability(action: ActionKind, state: &WlState, config: &Config) -> ActionA
 fn config_block_reason(action: &ActionKind, config: &Config) -> Option<Unavailable> {
     if matches!(
         action,
-        ActionKind::LaunchTerminal { .. } | ActionKind::QuickLaunch { .. }
+        ActionKind::LaunchTerminal { .. }
+            | ActionKind::QuickLaunch { .. }
+            | ActionKind::WorkloadLaunch {
+                item_kind: LauncherItemKind::Shell,
+                ..
+            }
     ) {
         return config.validate().err().map(|err| Unavailable::Blocked {
             detail: err.to_string(),
@@ -332,7 +393,7 @@ fn required_role(action: &ActionKind) -> AuthRole {
         | ActionKind::AudioSpeakerVolume { .. }
         | ActionKind::AudioMicGain { .. }
         | ActionKind::AudioOff { .. } => AuthRole::Admin,
-        ActionKind::Build { .. } => AuthRole::Launcher,
+        ActionKind::Build { .. } | ActionKind::WorkloadLaunch { .. } => AuthRole::Launcher,
         _ => AuthRole::None,
     }
 }
@@ -376,6 +437,30 @@ fn rank(role: AuthRole) -> u8 {
 
 fn running_vm<'a>(state: &'a WlState, name: &str) -> Option<&'a Vm> {
     state.vms.iter().find(|v| v.name == name)
+}
+
+fn workload_by_target<'a>(state: &'a WlState, target: &str) -> Option<&'a RealmLauncherEntry> {
+    state
+        .realm_groups
+        .iter()
+        .flat_map(|group| &group.workloads)
+        .find(|workload| workload.canonical_target == target)
+}
+
+fn unsafe_local_workload_for_vm<'a>(
+    state: &'a WlState,
+    vm_name: &str,
+) -> Option<&'a RealmLauncherEntry> {
+    let vm_target = running_vm(state, vm_name).and_then(|vm| vm.canonical_target.as_deref());
+    state
+        .realm_groups
+        .iter()
+        .flat_map(|group| &group.workloads)
+        .find(|workload| {
+            workload.is_unsafe_local()
+                && (workload.legacy_vm_name.as_deref() == Some(vm_name)
+                    || vm_target == Some(workload.canonical_target.as_str()))
+        })
 }
 
 fn usb_attach_block(state: &WlState, vm: &str, bus_id: &str) -> Option<Unavailable> {
@@ -481,27 +566,38 @@ fn observability_argv(config: &Config) -> PlannedAction {
     PlannedAction::Process { argv, wait: false }
 }
 
-fn realm_workload_launch_argv(realm_id: &str, action_id: &str) -> PlannedAction {
-    // `d2b realm workload launch --realm <realm_id> <action_id>`
-    PlannedAction::Process {
-        argv: vec![
+fn workload_launch_argv(
+    target: &str,
+    item_id: &str,
+    item_kind: LauncherItemKind,
+    config: &Config,
+) -> PlannedAction {
+    let argv = match item_kind {
+        LauncherItemKind::Exec => vec![
             "d2b".to_owned(),
-            "realm".to_owned(),
-            "workload".to_owned(),
             "launch".to_owned(),
-            "--realm".to_owned(),
-            realm_id.to_owned(),
-            action_id.to_owned(),
+            target.to_owned(),
+            "--item".to_owned(),
+            item_id.to_owned(),
         ],
-        wait: false,
-    }
+        LauncherItemKind::Shell => {
+            let mut argv = config.terminal.wlterm_argv.clone();
+            argv.push(target.to_owned());
+            argv.push(item_id.to_owned());
+            argv
+        }
+        LauncherItemKind::Unknown => Vec::new(),
+    };
+    PlannedAction::Process { argv, wait: true }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::UsbClaim;
-    use crate::model::{AudioChannelState, AudioProviderKind, VmAudioState};
+    use crate::model::{
+        AudioChannelState, AudioProviderKind, IsolationPosture, LauncherIcon, LauncherItemSummary,
+        RealmGroup, UsbClaim, VmAudioState, WorkloadExecutionPosture, WorkloadProviderKind,
+    };
 
     fn connected_state(role: AuthRole, vms: Vec<Vm>) -> WlState {
         WlState {
@@ -529,6 +625,66 @@ mod tests {
             bus_id: bus_id.into(),
             bound,
             owner_vm: owner_vm.map(str::to_owned),
+        }
+    }
+
+    fn workload_state(
+        provider_kind: WorkloadProviderKind,
+        availability: WorkloadAvailability,
+    ) -> WlState {
+        let target = "tools.host.d2b";
+        let workload = RealmLauncherEntry {
+            workload_name: "tools".to_owned(),
+            label: "Host Tools".to_owned(),
+            canonical_target: target.to_owned(),
+            realm_name: "host".to_owned(),
+            realm_id: "host".to_owned(),
+            provider_kind,
+            availability,
+            execution_posture: WorkloadExecutionPosture {
+                isolation: if provider_kind == WorkloadProviderKind::UnsafeLocal {
+                    IsolationPosture::UnsafeLocal
+                } else {
+                    IsolationPosture::VirtualMachine
+                },
+                ..Default::default()
+            },
+            launcher_items: vec![
+                LauncherItemSummary {
+                    id: "firefox".to_owned(),
+                    name: "Firefox".to_owned(),
+                    icon: LauncherIcon {
+                        id: Some("firefox".to_owned()),
+                        name: Some("web-browser".to_owned()),
+                    },
+                    kind: LauncherItemKind::Exec,
+                    graphical: true,
+                    capabilities: vec!["configured-launch".to_owned()],
+                },
+                LauncherItemSummary {
+                    id: "terminal".to_owned(),
+                    name: "Terminal".to_owned(),
+                    icon: LauncherIcon {
+                        id: None,
+                        name: Some("terminal".to_owned()),
+                    },
+                    kind: LauncherItemKind::Shell,
+                    graphical: false,
+                    capabilities: vec!["persistent-shell".to_owned()],
+                },
+            ],
+            ..Default::default()
+        };
+        WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Launcher,
+            realm_groups: vec![RealmGroup {
+                realm_name: "host".to_owned(),
+                realm_id: "host".to_owned(),
+                realm_color: "#ff8080".to_owned(),
+                workloads: vec![workload],
+            }],
+            ..Default::default()
         }
     }
 
@@ -1174,5 +1330,131 @@ mod tests {
                 wait: true,
             }
         );
+    }
+
+    #[test]
+    fn configured_exec_uses_exact_d2b_launch_argv() {
+        let state = workload_state(
+            WorkloadProviderKind::UnsafeLocal,
+            WorkloadAvailability::Ready,
+        );
+        let planned = plan(
+            &ActionKind::WorkloadLaunch {
+                target: "tools.host.d2b".to_owned(),
+                item_id: "firefox".to_owned(),
+                item_kind: LauncherItemKind::Exec,
+            },
+            &state,
+            &Config::default(),
+        )
+        .expect("configured exec launch");
+        assert_eq!(
+            planned,
+            PlannedAction::Process {
+                argv: vec![
+                    "d2b".to_owned(),
+                    "launch".to_owned(),
+                    "tools.host.d2b".to_owned(),
+                    "--item".to_owned(),
+                    "firefox".to_owned(),
+                ],
+                wait: true,
+            }
+        );
+    }
+
+    #[test]
+    fn shell_item_routes_to_wlterm_with_canonical_target() {
+        let state = workload_state(
+            WorkloadProviderKind::UnsafeLocal,
+            WorkloadAvailability::Ready,
+        );
+        let planned = plan(
+            &ActionKind::WorkloadLaunch {
+                target: "tools.host.d2b".to_owned(),
+                item_id: "terminal".to_owned(),
+                item_kind: LauncherItemKind::Shell,
+            },
+            &state,
+            &Config::default(),
+        )
+        .expect("persistent shell launch");
+        assert_eq!(
+            planned,
+            PlannedAction::Process {
+                argv: vec![
+                    "d2b-wlterm".to_owned(),
+                    "open".to_owned(),
+                    "tools.host.d2b".to_owned(),
+                    "terminal".to_owned(),
+                ],
+                wait: true,
+            }
+        );
+    }
+
+    #[test]
+    fn helper_unavailable_blocks_launch_with_remediation() {
+        let state = workload_state(
+            WorkloadProviderKind::UnsafeLocal,
+            WorkloadAvailability::HelperUnavailable,
+        );
+        let error = plan(
+            &ActionKind::WorkloadLaunch {
+                target: "tools.host.d2b".to_owned(),
+                item_id: "firefox".to_owned(),
+                item_kind: LauncherItemKind::Exec,
+            },
+            &state,
+            &Config::default(),
+        )
+        .expect_err("helper unavailable");
+        assert!(matches!(error, Unavailable::Blocked { detail }
+                if detail.contains("enable and start") && detail.contains("user service")));
+    }
+
+    #[test]
+    fn unsafe_local_vm_shaped_controls_fail_closed() {
+        let mut state = workload_state(
+            WorkloadProviderKind::UnsafeLocal,
+            WorkloadAvailability::Ready,
+        );
+        state.role = AuthRole::Admin;
+        state.vms.push(Vm {
+            name: "tools".to_owned(),
+            canonical_target: Some("tools.host.d2b".to_owned()),
+            state: RuntimeState::Running,
+            ..Default::default()
+        });
+        for action in [
+            ActionKind::Stop {
+                vm: "tools".to_owned(),
+            },
+            ActionKind::Build {
+                vm: "tools".to_owned(),
+            },
+            ActionKind::StoreVerify {
+                vm: "tools".to_owned(),
+            },
+            ActionKind::UsbAttach {
+                vm: "tools".to_owned(),
+                bus_id: "1-2".to_owned(),
+            },
+            ActionKind::AudioOff {
+                vm: "tools".to_owned(),
+            },
+            ActionKind::LaunchTerminal {
+                vm: "tools".to_owned(),
+            },
+        ] {
+            assert!(
+                matches!(
+                    block_reason(&action, &state),
+                    Some(Unavailable::Blocked { detail })
+                        if detail.contains("launcher items only")
+                ),
+                "{action:?}"
+            );
+        }
     }
 }

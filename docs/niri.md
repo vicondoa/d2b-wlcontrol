@@ -1,46 +1,31 @@
 # niri / Wayland integration
 
-`d2b-wlcontrol` targets niri (and Wayland compositors generally)
-natively. It makes **no XWayland assumptions** and uses:
+The control center is a native Quickshell layer-shell surface. It requires no
+niri window rule and makes no XWayland assumptions. `d2b-wlcontrol open`
+toggles a draggable top-right popup; long realm/VM lists scroll inside the
+bounded panel.
 
-- a Waybar custom module for the bar indicator; and
-- a Quickshell layer-shell popup for the control surface.
+## Realm presentation
 
-## Popup behavior
+Realm cards use d2b accent metadata. The popup's neutral background/text palette
+comes from `[theme]`, while realm rails, VM borders, and state accents continue
+to come from d2b's public UI color artifact. Missing or malformed accent data
+removes the affected accent instead of inventing a policy color.
 
-`d2b-wlcontrol open` toggles a draggable top-right Quickshell popup:
+Unsafe-local windows launched by d2b are expected to pass through
+`d2b-wayland-proxy` and receive their realm identity rail. Wlcontrol displays the
+same realm accent and a no-isolation warning, but the color/rail is presentation
+metadata—not containment or authorization.
 
-- first invocation shows it;
-- the next invocation hides it;
-- the popup is a layer-shell surface, not a normal tiled window;
-- drag the header/background to reposition it after opening;
-- the popup fits its VM cards until it reaches about half the screen height,
-  then uses a thin scrollbar for overflow; and
-- no niri `window-rule` is required.
+## Launch paths
 
-This matches Waybar click ergonomics: bind left-click to
-`d2b-wlcontrol open`, click once to show controls, click again to
-hide them.
+- Configured graphical `exec` items are submitted to d2b configured launch.
+  Provider status must say the Wayland proxy is available; there is no direct
+  compositor fallback.
+- Configured `shell` items invoke wlterm with the canonical workload target.
+  Wlterm owns the persistent shell and terminal-window proxy integration.
+- Existing local VM terminal controls remain guest-control operations and are
+  not used for unsafe-local workloads.
 
-## Theme
-
-The popup and Waybar styling share d2b's generated color artifacts:
-
-- `/etc/d2b/ui-colors.json` carries version `1`, host and state
-  accents, per-env accents, and per-VM active / inactive / urgent border
-  colors.
-- `/etc/d2b/ui-colors.css` exposes the same palette as GTK
-  `@define-color` names such as `@d2b_state_running` for Waybar.
-
-The JSON shape is:
-`{ version: 1, host: { accent }, states: { running, transitioning,
-pendingRestart, error, denied, unknown }, envs: { <env>: { accent } },
-vms: { <vm>: { env, border: { active, inactive, urgent } } } }`.
-
-`d2b-wlcontrol open` reads the configured d2b color artifact and passes
-it to the popup as `D2B_WLCONTROL_THEME_JSON`. The popup keeps its
-neutral black/white/gray shell colors locally, but uses d2b state colors
-for VM dots and action feedback, per-VM active border colors for card
-borders, and no per-card environment stripe. Missing, invalid, or malformed
-color data is ignored and the affected colored accent/border surfaces render
-without color instead of using wlcontrol-owned color defaults.
+If the graphical user manager, Wayland session, or proxy is unavailable, the
+row remains visible but disabled with remediation.

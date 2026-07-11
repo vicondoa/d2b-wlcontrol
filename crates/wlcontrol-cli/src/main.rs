@@ -1,9 +1,5 @@
 //! `d2b-wlcontrol` — Waybar module, control-center launcher, and action
 //! dispatcher for d2b VMs.
-//!
-//! Owning wave: **Wave 0 (integrator) skeleton**; **Wave 2 — CLI/action shell
-//! agent** hardens the Waybar loop (signals, no-overlap refresh, backoff),
-//! single-instance `open`, and the full action surface.
 
 use std::env;
 use std::fs::{self, DirBuilder, OpenOptions};
@@ -19,10 +15,8 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand};
 use d2b_toolkit_core::Redacted;
 use serde::Serialize;
-use wlcontrol_core::model::{ActionKind, Connectivity, Unavailable};
-use wlcontrol_core::{
-    plan, reduce, Config, LauncherWorkload, PlannedAction, UiColorArtifact, WlState,
-};
+use wlcontrol_core::model::{ActionKind, Connectivity, LauncherItemKind, Unavailable};
+use wlcontrol_core::{plan, reduce, Config, PlannedAction, UiColorArtifact, WlState};
 use wlcontrol_d2b::D2bClient;
 use wlcontrol_waybar::DisplayMode;
 
@@ -54,7 +48,7 @@ unsafe extern "C" {
 #[command(
     name = "d2b-wlcontrol",
     version,
-    about = "Clean Waybar indicator and control center for d2b VMs."
+    about = "Waybar indicator and control center for d2b workloads."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -94,6 +88,8 @@ enum ActionCommand {
     Start { vm: String },
     /// Stop a VM.
     Stop { vm: String },
+    /// Force-stop a VM without graceful guest shutdown.
+    ForceStop { vm: String },
     /// Restart a VM.
     Restart { vm: String },
     /// Activate a VM's current closure.
@@ -106,11 +102,11 @@ enum ActionCommand {
     Terminal { vm: String },
     /// Run a configured guest quick-launch command.
     QuickLaunch { vm: String, id: String },
-    /// Launch a realm workload action from the launcher metadata artifact.
-    RealmWorkloadLaunch {
-        realm_id: String,
-        action_id: String,
-        workload_name: String,
+    /// Launch a configured public workload item.
+    WorkloadLaunch {
+        target: String,
+        item_id: String,
+        kind: LauncherItemArg,
     },
     /// Attach a USB busid to a VM.
     UsbAttach { vm: String, bus_id: String },
@@ -138,6 +134,21 @@ enum AudioToggle {
     Off,
 }
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum LauncherItemArg {
+    Exec,
+    Shell,
+}
+
+impl From<LauncherItemArg> for LauncherItemKind {
+    fn from(value: LauncherItemArg) -> Self {
+        match value {
+            LauncherItemArg::Exec => Self::Exec,
+            LauncherItemArg::Shell => Self::Shell,
+        }
+    }
+}
+
 impl ActionCommand {
     fn into_kind(self) -> ActionKind {
         match self {
@@ -146,20 +157,21 @@ impl ActionCommand {
             ActionCommand::Open => ActionKind::OpenControlCenter,
             ActionCommand::Start { vm } => ActionKind::Start { vm },
             ActionCommand::Stop { vm } => ActionKind::Stop { vm },
+            ActionCommand::ForceStop { vm } => ActionKind::ForceStop { vm },
             ActionCommand::Restart { vm } => ActionKind::Restart { vm },
             ActionCommand::Switch { vm } => ActionKind::Switch { vm },
             ActionCommand::Build { vm } => ActionKind::Build { vm },
             ActionCommand::Boot { vm } => ActionKind::Boot { vm },
             ActionCommand::Terminal { vm } => ActionKind::LaunchTerminal { vm },
             ActionCommand::QuickLaunch { vm, id } => ActionKind::QuickLaunch { vm, id },
-            ActionCommand::RealmWorkloadLaunch {
-                realm_id,
-                action_id,
-                workload_name,
-            } => ActionKind::RealmWorkloadLaunch {
-                realm_id,
-                action_id,
-                workload_name,
+            ActionCommand::WorkloadLaunch {
+                target,
+                item_id,
+                kind,
+            } => ActionKind::WorkloadLaunch {
+                target,
+                item_id,
+                item_kind: kind.into(),
             },
             ActionCommand::UsbAttach { vm, bus_id } => ActionKind::UsbAttach { vm, bus_id },
             ActionCommand::UsbDetach { vm, bus_id } => ActionKind::UsbDetach { vm, bus_id },
@@ -217,28 +229,15 @@ fn run(cli: Cli) -> wlcontrol_core::WlResult<ExitCode> {
 /// Build the current reduced state from one refresh cycle.
 fn current_state(config: &Config) -> WlState {
     let client = D2bClient::new(config);
-    let (ui_colors, launcher_workloads) = launcher_context(config);
-    reduce::reduce_with_realm_groups(
-        client.refresh(),
-        config,
-        ui_colors.as_ref(),
-        launcher_workloads,
-    )
+    let ui_colors = color_context(config);
+    reduce::reduce_with_workloads(client.refresh(), config, ui_colors.as_ref())
 }
 
-fn launcher_context(config: &Config) -> (Option<UiColorArtifact>, Vec<LauncherWorkload>) {
-    let ui_colors = config.load_ui_colors().unwrap_or_else(|err| {
+fn color_context(config: &Config) -> Option<UiColorArtifact> {
+    config.load_ui_colors().unwrap_or_else(|err| {
         eprintln!("d2b-wlcontrol: failed to load UI colors: {err}");
         None
-    });
-    let launcher_workloads = config
-        .load_launcher_metadata()
-        .unwrap_or_else(|err| {
-            eprintln!("d2b-wlcontrol: failed to load launcher metadata: {err}");
-            None
-        })
-        .unwrap_or_default();
-    (ui_colors, launcher_workloads)
+    })
 }
 
 fn run_status_json(config: &Config) -> wlcontrol_core::WlResult<ExitCode> {
@@ -339,7 +338,12 @@ fn run_waybar(config: &Config) -> wlcontrol_core::WlResult<ExitCode> {
     loop {
         let state = current_state(config);
         let mode = read_display_mode_from_default_path();
-        let line = wlcontrol_waybar::render_mode(&state, mode);
+        let line = wlcontrol_waybar::render_mode_with_presentation(
+            &state,
+            mode,
+            &config.waybar.icon,
+            &config.waybar.label,
+        );
         // Best-effort write; a closed pipe means Waybar went away.
         if stdout.write_all(line.to_json_line().as_bytes()).is_err() {
             break;
@@ -777,10 +781,6 @@ mod tests {
             .join("state-file")
     }
 
-    fn test_artifact_file(name: &str) -> PathBuf {
-        test_state_file(name).with_file_name("realm-workloads-launcher.json")
-    }
-
     fn cleanup_state_file(path: &Path) {
         if let Some(parent) = path.parent() {
             let _ = fs::remove_dir_all(parent);
@@ -820,44 +820,40 @@ mod tests {
     }
 
     #[test]
-    fn missing_display_mode_file_defaults_to_compact() {
-        let path = test_state_file("missing-display-mode");
-        assert_eq!(read_display_mode_at(&path), DisplayMode::Compact);
-        cleanup_state_file(&path);
+    fn configured_launch_cli_preserves_typed_kind_and_canonical_target() {
+        let cli = Cli::try_parse_from([
+            "d2b-wlcontrol",
+            "action",
+            "workload-launch",
+            "tools.host.d2b",
+            "firefox",
+            "exec",
+        ])
+        .expect("parse workload launch");
+        let Command::Action { action } = cli.command else {
+            panic!("expected action command");
+        };
+        assert_eq!(
+            action.into_kind(),
+            ActionKind::WorkloadLaunch {
+                target: "tools.host.d2b".to_owned(),
+                item_id: "firefox".to_owned(),
+                item_kind: LauncherItemKind::Exec,
+            }
+        );
     }
 
     #[test]
-    fn launcher_context_loads_configured_realm_metadata() {
-        let path = test_artifact_file("launcher-context-loads-metadata");
-        fs::create_dir_all(path.parent().expect("artifact has parent")).expect("create parent");
-        fs::write(
-            &path,
-            r##"{
-              "schemaVersion": "v1",
-              "workloads": [
-                {
-                  "realmName": "work",
-                  "realmId": "work",
-                  "workloadName": "aad",
-                  "actionId": "terminal.work.aad",
-                  "label": "Work AAD",
-                  "icon": "terminal",
-                  "canonicalTarget": "aad.work.d2b",
-                  "legacyVmName": "work-aad"
-                }
-              ]
-            }"##,
-        )
-        .expect("write launcher artifact");
+    fn waited_process_failure_is_returned_to_the_ui_boundary() {
+        let code =
+            run_process(vec!["false".to_owned()], true, &Config::default()).expect("run false");
+        assert_ne!(code, ExitCode::SUCCESS);
+    }
 
-        let config = Config {
-            launcher_metadata_path: path.display().to_string(),
-            ..Config::default()
-        };
-
-        let (_colors, workloads) = launcher_context(&config);
-        assert_eq!(workloads.len(), 1);
-        assert_eq!(workloads[0].canonical_target, "aad.work.d2b");
+    #[test]
+    fn missing_display_mode_file_defaults_to_compact() {
+        let path = test_state_file("missing-display-mode");
+        assert_eq!(read_display_mode_at(&path), DisplayMode::Compact);
         cleanup_state_file(&path);
     }
 

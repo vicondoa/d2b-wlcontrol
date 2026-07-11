@@ -1,0 +1,9 @@
+{
+  "text": "◆ 0/0 !",
+  "class": [
+    "all-stopped",
+    "attention",
+    "unsafe-local"
+  ],
+  "tooltip": "role: launcher · connectivity: connected\nNo visible VMs\n\n— realm launchers —\nhost (#ff8080) · unsafe-local: no isolation, user-manager lifetime\n  Host Tools: [web-browser Firefox]\n    Unsafe-local helper unavailable; enable and start the d2b unsafe-local user service."
+}

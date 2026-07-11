@@ -1,10 +1,5 @@
 //! State reduction and precedence.
 //!
-//! Owning wave: **Wave 1 — Core model agent**. Wave 0 ships a correct baseline
-//! so downstream surfaces have real data to render; the Wave 1 agent hardens
-//! the precedence rules, net-VM detection, and inconsistency → attention
-//! mapping per the plan's "State model" section.
-//!
 //! Precedence contract:
 //! 1. `inventory` (`d2b list`) defines the declared VM set, env, features,
 //!    static IP, and default order.
@@ -19,9 +14,10 @@ use std::collections::HashSet;
 use crate::config::Config;
 use crate::model::{
     AudioChannelState, AudioEnforcementPosture, AudioProviderKind, AuthRole, Connectivity,
-    QuickLaunchIcon, RealmGroup, RuntimeState, UsbClaim, Vm, VmAudioState, VmCapabilities, WlState,
+    QuickLaunchIcon, RealmGroup, RealmLauncherEntry, RuntimeState, UsbClaim, Vm, VmAudioState,
+    VmCapabilities, WlState,
 };
-use crate::realm_launcher::{build_realm_groups, LauncherWorkload};
+use crate::realm_launcher::build_realm_groups;
 use crate::sources::{AudioStatus, InventoryVm, ReduceInput, VmStatus};
 
 /// Reduce a bundle of source fragments into the aggregate [`WlState`].
@@ -31,22 +27,15 @@ pub fn reduce(input: ReduceInput) -> WlState {
 
 /// Reduce source fragments with user configuration for ordering and visibility.
 ///
-/// Realm groups are not populated here. Use [`reduce_with_realm_groups`] when
-/// pre-loaded launcher metadata is available.
 pub fn reduce_with_config(input: ReduceInput, config: &Config) -> WlState {
-    reduce_with_realm_groups(input, config, None, Vec::new())
+    reduce_with_workloads(input, config, None)
 }
 
-/// Reduce source fragments, attaching pre-loaded realm groups to the output.
-///
-/// `ui_colors` is used by [`build_realm_groups`] to resolve realm accent
-/// colors.  `launcher_workloads` comes from
-/// [`Config::load_launcher_metadata`].
-pub fn reduce_with_realm_groups(
+/// Reduce source fragments and group public workload inventory by realm.
+pub fn reduce_with_workloads(
     input: ReduceInput,
     config: &Config,
     ui_colors: Option<&crate::config::UiColorArtifact>,
-    launcher_workloads: Vec<LauncherWorkload>,
 ) -> WlState {
     let ReduceInput {
         connectivity,
@@ -55,6 +44,7 @@ pub fn reduce_with_realm_groups(
         statuses,
         usb,
         audio,
+        workloads,
     } = input;
 
     if connectivity != Connectivity::Connected {
@@ -62,9 +52,7 @@ pub fn reduce_with_realm_groups(
             connectivity,
             role: AuthRole::None,
             vms: Vec::new(),
-            realm_groups: Vec::new(),
-            stale: false,
-            note: None,
+            ..Default::default()
         };
     }
 
@@ -99,7 +87,13 @@ pub fn reduce_with_realm_groups(
         })
         .collect();
 
-    let realm_groups: Vec<RealmGroup> = build_realm_groups(launcher_workloads, ui_colors);
+    let public_workloads = workloads
+        .unwrap_or_default()
+        .workloads
+        .into_iter()
+        .map(|workload| apply_launcher_overrides(workload, config))
+        .collect();
+    let realm_groups: Vec<RealmGroup> = build_realm_groups(public_workloads, ui_colors);
 
     WlState {
         connectivity,
@@ -109,6 +103,26 @@ pub fn reduce_with_realm_groups(
         stale: false,
         note: None,
     }
+}
+
+fn apply_launcher_overrides(
+    mut workload: RealmLauncherEntry,
+    config: &Config,
+) -> RealmLauncherEntry {
+    for item in &mut workload.launcher_items {
+        let Some(item_override) = config.launcher_overrides.iter().find(|candidate| {
+            candidate.target == workload.canonical_target && candidate.item_id == item.id
+        }) else {
+            continue;
+        };
+        if let Some(name) = &item_override.name {
+            item.name.clone_from(name);
+        }
+        if let Some(icon) = &item_override.icon {
+            item.icon.name = Some(icon.clone());
+        }
+    }
+    workload
 }
 
 fn build_vm(
@@ -269,6 +283,7 @@ mod tests {
     use super::*;
     use crate::sources::{
         AudioStatus, AudioStatusEntry, AudioStatusError, Auth, Inventory, UsbProbe,
+        WorkloadInventory,
     };
 
     fn inventory_vm(name: &str, coarse_status: Option<&str>) -> InventoryVm {
@@ -365,6 +380,7 @@ mod tests {
             }],
             usb: Some(UsbProbe::default()),
             audio: None,
+            workloads: None,
         };
         let state = reduce(input);
         assert_eq!(state.vms.len(), 1);
@@ -651,5 +667,56 @@ mod tests {
         assert_eq!(state.vms[0].quick_launch.len(), 1);
         assert_eq!(state.vms[0].quick_launch[0].id, "run-openterface");
         assert!(state.vms[1].quick_launch.is_empty());
+    }
+
+    #[test]
+    fn public_workloads_reduce_into_realm_groups_and_apply_item_overrides() {
+        let workload = RealmLauncherEntry {
+            workload_name: "tools".to_owned(),
+            label: "Host Tools".to_owned(),
+            canonical_target: "tools.host.d2b".to_owned(),
+            realm_name: "host".to_owned(),
+            realm_id: "host".to_owned(),
+            provider_kind: crate::model::WorkloadProviderKind::UnsafeLocal,
+            availability: crate::model::WorkloadAvailability::Ready,
+            launcher_items: vec![crate::model::LauncherItemSummary {
+                id: "browser".to_owned(),
+                name: "Firefox".to_owned(),
+                icon: crate::model::LauncherIcon {
+                    id: Some("firefox".to_owned()),
+                    name: Some("web-browser".to_owned()),
+                },
+                kind: crate::model::LauncherItemKind::Exec,
+                graphical: true,
+                capabilities: vec!["configured-launch".to_owned()],
+            }],
+            ..Default::default()
+        };
+        let input = ReduceInput {
+            connectivity: Connectivity::Connected,
+            auth: Some(Auth {
+                role: AuthRole::Launcher,
+            }),
+            workloads: Some(WorkloadInventory {
+                workloads: vec![workload],
+            }),
+            ..Default::default()
+        };
+        let config = Config {
+            launcher_overrides: vec![crate::config::LauncherOverride {
+                target: "tools.host.d2b".to_owned(),
+                item_id: "browser".to_owned(),
+                name: Some("Web".to_owned()),
+                icon: Some("language".to_owned()),
+            }],
+            ..Default::default()
+        };
+
+        let state = reduce_with_config(input, &config);
+        assert_eq!(state.realm_groups.len(), 1);
+        assert!(state.realm_groups[0].all_unsafe_local());
+        let item = &state.realm_groups[0].workloads[0].launcher_items[0];
+        assert_eq!(item.name, "Web");
+        assert_eq!(item.icon.preferred(), "language");
     }
 }

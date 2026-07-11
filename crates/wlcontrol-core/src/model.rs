@@ -8,10 +8,8 @@
 //! - `wlcontrol-waybar` and `wlcontrol-ui` render [`WlState`].
 //! - `wlcontrol-cli` dispatches [`PlannedAction`].
 //!
-//! Owning wave: Wave 0 (integrator). Downstream fleet agents may **extend**
-//! these types (add fields with `#[serde(default)]`, add enum variants at the
-//! end) but must not break the published field/variant names that other crates
-//! already consume. Breaking changes go through an integrator prep commit.
+//! Downstream crates may extend these types additively but must not break
+//! published field or variant names.
 
 use serde::{Deserialize, Serialize};
 
@@ -175,16 +173,204 @@ pub struct QuickLaunchIcon {
     pub tooltip: String,
 }
 
-/// A single workload launcher entry within a [`RealmGroup`].
+/// Runtime provider backing a public workload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkloadProviderKind {
+    LocalVm,
+    QemuMedia,
+    ProviderManaged,
+    UnsafeLocal,
+    #[default]
+    Unknown,
+}
+
+impl WorkloadProviderKind {
+    pub fn is_unsafe_local(self) -> bool {
+        self == Self::UnsafeLocal
+    }
+}
+
+/// Isolation boundary advertised for a workload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum IsolationPosture {
+    VirtualMachine,
+    ProviderManaged,
+    UnsafeLocal,
+    #[default]
+    Unknown,
+}
+
+/// Environment ownership advertised for workload execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum EnvironmentPosture {
+    RuntimeManaged,
+    SystemdUserManagerAmbient,
+    #[default]
+    Unknown,
+}
+
+/// Display-environment boundary advertised for workload execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DisplayEnvironmentPosture {
+    RuntimeManaged,
+    WaylandProxyOnly,
+    NotApplicable,
+    #[default]
+    Unknown,
+}
+
+/// Identity used to execute a workload item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecutionIdentityPosture {
+    WorkloadUser,
+    ProviderManaged,
+    AuthenticatedRequesterUid,
+    #[default]
+    Unknown,
+}
+
+/// Lifetime boundary advertised for launched workload sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionPersistencePosture {
+    RuntimeManaged,
+    UserManagerLifetime,
+    #[default]
+    Unknown,
+}
+
+/// Structured execution posture from d2b's public workload status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkloadExecutionPosture {
+    #[serde(default)]
+    pub isolation: IsolationPosture,
+    #[serde(default)]
+    pub environment: EnvironmentPosture,
+    #[serde(default)]
+    pub display_environment: DisplayEnvironmentPosture,
+    #[serde(default)]
+    pub execution_identity: ExecutionIdentityPosture,
+    #[serde(default)]
+    pub session_persistence: SessionPersistencePosture,
+}
+
+/// Provider readiness for configured launch and shell operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkloadAvailability {
+    Ready,
+    HelperUnavailable,
+    HelperStale,
+    UserManagerUnavailable,
+    GraphicalSessionInactive,
+    WaylandUnavailable,
+    ProxyUnavailable,
+    Degraded,
+    #[default]
+    Unknown,
+}
+
+impl WorkloadAvailability {
+    pub fn remediation(self) -> Option<&'static str> {
+        match self {
+            Self::Ready => None,
+            Self::HelperUnavailable => Some(
+                "Unsafe-local helper unavailable; enable and start the d2b unsafe-local user service.",
+            ),
+            Self::HelperStale => {
+                Some("Unsafe-local helper is stale; restart the d2b unsafe-local user service.")
+            }
+            Self::UserManagerUnavailable => Some(
+                "User manager unavailable; sign in through a graphical PAM session and start systemd --user.",
+            ),
+            Self::GraphicalSessionInactive => {
+                Some("Graphical session inactive; sign in to the target Wayland session.")
+            }
+            Self::WaylandUnavailable => {
+                Some("Wayland unavailable; restore the graphical session before launching.")
+            }
+            Self::ProxyUnavailable => {
+                Some("Wayland proxy unavailable; restart the d2b desktop user services.")
+            }
+            Self::Degraded => Some("Workload provider is degraded; inspect d2b workload status."),
+            Self::Unknown => Some("Workload availability was not reported by d2b."),
+        }
+    }
+}
+
+/// Runtime state from the public workload inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkloadRuntimeState {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+    Failed,
+    #[default]
+    Unknown,
+}
+
+/// Generic configured launcher-item kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LauncherItemKind {
+    Exec,
+    Shell,
+    #[default]
+    Unknown,
+}
+
+/// Public presentation icon owned by a configured launcher item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherIcon {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl LauncherIcon {
+    pub fn preferred(&self) -> &str {
+        self.name
+            .as_deref()
+            .or(self.id.as_deref())
+            .unwrap_or("apps")
+    }
+}
+
+/// One configured public launcher item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherItemSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub icon: LauncherIcon,
+    #[serde(default, rename = "type")]
+    pub kind: LauncherItemKind,
+    #[serde(default)]
+    pub graphical: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
+/// A public workload summary within a [`RealmGroup`].
 ///
-/// One entry corresponds to one row in `realm-workloads-launcher.json`.
-/// When `has_icon_collision` is true, multiple workloads in the same realm
-/// share the same icon; the UI must open a chooser rather than launching
-/// the workload directly.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The historical launcher fields remain for serialized compatibility. New
+/// renderers consume the provider, posture, availability, and generic
+/// `launcher_items` fields populated from d2b's public workload inventory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RealmLauncherEntry {
-    /// Stable action ID from `realm-workloads-launcher.json`.
+    /// Historical default action ID.
     pub action_id: String,
     /// Workload name within the realm.
     pub workload_name: String,
@@ -206,6 +392,42 @@ pub struct RealmLauncherEntry {
     /// Empty when `has_icon_collision` is false.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub icon_siblings: Vec<String>,
+    /// Realm presentation name and stable ID from public workload identity.
+    #[serde(default)]
+    pub realm_name: String,
+    #[serde(default)]
+    pub realm_id: String,
+    /// Runtime provider and structured execution posture.
+    #[serde(default)]
+    pub provider_kind: WorkloadProviderKind,
+    #[serde(default)]
+    pub execution_posture: WorkloadExecutionPosture,
+    /// Current provider readiness and workload runtime state.
+    #[serde(default)]
+    pub availability: WorkloadAvailability,
+    #[serde(default)]
+    pub workload_state: WorkloadRuntimeState,
+    /// Known and forward-compatible unknown capability tokens.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+    /// Configured exec and shell items owned by this workload.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launcher_items: Vec<LauncherItemSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_item_id: Option<String>,
+}
+
+impl RealmLauncherEntry {
+    pub fn is_unsafe_local(&self) -> bool {
+        self.provider_kind.is_unsafe_local()
+            || self.execution_posture.isolation == IsolationPosture::UnsafeLocal
+    }
+
+    pub fn warning(&self) -> Option<&'static str> {
+        self.is_unsafe_local().then_some(
+            "No isolation; processes run as your host user for the user-manager lifetime.",
+        )
+    }
 }
 
 /// A realm group in the quick-launch surface.
@@ -227,6 +449,26 @@ pub struct RealmGroup {
     pub realm_color: String,
     /// Workload entries within this realm, in declaration order.
     pub workloads: Vec<RealmLauncherEntry>,
+}
+
+impl RealmGroup {
+    pub fn all_unsafe_local(&self) -> bool {
+        !self.workloads.is_empty()
+            && self
+                .workloads
+                .iter()
+                .all(RealmLauncherEntry::is_unsafe_local)
+    }
+
+    pub fn has_mixed_isolation(&self) -> bool {
+        self.workloads
+            .iter()
+            .any(RealmLauncherEntry::is_unsafe_local)
+            && self
+                .workloads
+                .iter()
+                .any(|workload| !workload.is_unsafe_local())
+    }
 }
 
 /// A normalized VM as presented to the UI surfaces.
@@ -304,11 +546,11 @@ pub struct WlState {
     /// All known VMs (including net VMs and hidden ones); renderers use
     /// `is_net_vm` / `hidden` to choose compact vs. detail surfaces.
     pub vms: Vec<Vm>,
-    /// Realm groups populated from `realm-workloads-launcher.json`.
+    /// Realm groups populated from d2b's public workload inventory.
     ///
     /// Each group carries a realm-scoped accent color for the outer border;
     /// inner workload borders use theme/default styling. Empty when the
-    /// launcher metadata artifact is absent or empty.
+    /// public workload operation is unavailable or empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub realm_groups: Vec<RealmGroup>,
     /// True when this state was served from cache after a failed refresh.
@@ -351,6 +593,14 @@ impl WlState {
                     || v.audio
                         .as_ref()
                         .is_some_and(|audio| audio.error_kind.is_some() || !audio.microphone.muted)
+            })
+            || self.realm_groups.iter().any(|group| {
+                group.workloads.iter().any(|workload| {
+                    !matches!(
+                        workload.availability,
+                        WorkloadAvailability::Ready | WorkloadAvailability::Unknown
+                    )
+                })
             })
     }
 }
@@ -402,17 +652,21 @@ pub enum ActionKind {
     OpenObservability,
     /// Cycle the Waybar compact/detail display mode.
     CycleDisplay,
-    /// Launch a realm workload by realm_id and action_id.
+    /// Historical realm launcher action retained for serialized compatibility.
     ///
-    /// Maps to `d2b realm workload launch <action_id>` or an equivalent
-    /// public-socket request. When `has_icon_collision` was set on the
-    /// corresponding [`RealmLauncherEntry`], the UI must first open a
-    /// chooser; this action represents the confirmed single-workload choice.
+    /// New callers use [`ActionKind::WorkloadLaunch`]. The planner rejects this
+    /// variant rather than consulting private launcher artifacts.
     RealmWorkloadLaunch {
         realm_id: String,
         action_id: String,
         /// Workload name, carried for display/audit purposes.
         workload_name: String,
+    },
+    /// Dispatch one configured public workload launcher item.
+    WorkloadLaunch {
+        target: String,
+        item_id: String,
+        item_kind: LauncherItemKind,
     },
 }
 
@@ -766,5 +1020,35 @@ mod tests {
         })
         .expect("serialize");
         assert!(force_json.contains(r#""force":true"#));
+    }
+
+    #[test]
+    fn historical_realm_launcher_fields_default_new_workload_contract() {
+        let entry: RealmLauncherEntry = serde_json::from_str(
+            r#"{
+                "actionId":"browser",
+                "workloadName":"browser",
+                "label":"Browser",
+                "icon":"web",
+                "canonicalTarget":"browser.work.d2b",
+                "hasIconCollision":false
+            }"#,
+        )
+        .expect("historical launcher entry");
+        assert_eq!(entry.provider_kind, WorkloadProviderKind::Unknown);
+        assert_eq!(entry.availability, WorkloadAvailability::Unknown);
+        assert!(entry.launcher_items.is_empty());
+    }
+
+    #[test]
+    fn generic_workload_action_round_trips_with_typed_item_kind() {
+        let action = ActionKind::WorkloadLaunch {
+            target: "tools.host.d2b".to_owned(),
+            item_id: "terminal".to_owned(),
+            item_kind: LauncherItemKind::Shell,
+        };
+        let encoded = serde_json::to_string(&action).expect("serialize workload action");
+        let decoded: ActionKind = serde_json::from_str(&encoded).expect("deserialize action");
+        assert_eq!(decoded, action);
     }
 }

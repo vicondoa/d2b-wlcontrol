@@ -1,10 +1,10 @@
 {
-  description = "d2b-wlcontrol — clean Waybar indicator and control center for d2b VMs";
+  description = "d2b-wlcontrol — Waybar indicator and control center for d2b workloads";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit";
+      url = "github:vicondoa/d2b-toolkit/fde6af8b842718e7150f5056d4eba73093d4ad77";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -27,12 +27,13 @@
         system:
         let
           pkgs = pkgsFor system;
+          toolkitSource = d2b-toolkit.packages.${system}.default;
         in
         {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = "d2b-wlcontrol";
-            version = "0.1.0";
-            src = self;
+            version = "0.2.0";
+            src = pkgs.lib.cleanSource ./.;
             cargoLock.lockFile = ./Cargo.lock;
 
             nativeBuildInputs = with pkgs; [ makeWrapper ];
@@ -42,6 +43,7 @@
               "-p"
               "wlcontrol-cli"
             ];
+            cargoTestFlags = [ "--workspace" ];
 
             postInstall = ''
               wrapProgram "$out/bin/d2b-wlcontrol" \
@@ -50,16 +52,130 @@
             '';
 
             postPatch = ''
-              ln -s ${d2b-toolkit.packages.${system}.default}/share/d2b-toolkit ../d2b-toolkit
+              substituteInPlace Cargo.toml \
+                --replace-fail "../d2b-toolkit/crates/d2b-client" \
+                  "${toolkitSource}/share/d2b-toolkit/crates/d2b-client" \
+                --replace-fail "../d2b-toolkit/crates/d2b-toolkit-core" \
+                  "${toolkitSource}/share/d2b-toolkit/crates/d2b-toolkit-core" \
+                --replace-fail "../d2b-toolkit/crates/d2b-wayland-core" \
+                  "${toolkitSource}/share/d2b-toolkit/crates/d2b-wayland-core" \
+                --replace-fail "../d2b-toolkit/crates/d2b-wayland-waybar" \
+                  "${toolkitSource}/share/d2b-toolkit/crates/d2b-wayland-waybar"
             '';
 
             meta = with pkgs.lib; {
-              description = "Waybar indicator and control center for d2b microVMs";
+              description = "Waybar indicator and control center for d2b workloads";
               license = licenses.asl20;
               mainProgram = "d2b-wlcontrol";
               platforms = systems;
             };
           };
+        }
+      );
+
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+          hmEval = pkgs.lib.evalModules {
+            specialArgs = { inherit pkgs; };
+            modules = [
+              (
+                { lib, ... }:
+                {
+                  options.assertions = lib.mkOption {
+                    type = lib.types.listOf lib.types.anything;
+                    default = [ ];
+                  };
+                  options.home.packages = lib.mkOption {
+                    type = lib.types.listOf lib.types.package;
+                    default = [ ];
+                  };
+                  options.xdg.configFile = lib.mkOption {
+                    type = lib.types.attrsOf lib.types.anything;
+                    default = { };
+                  };
+                  options.programs.waybar.enable = lib.mkOption {
+                    type = lib.types.bool;
+                    default = false;
+                  };
+                  options.programs.waybar.style = lib.mkOption {
+                    type = lib.types.lines;
+                    default = "";
+                  };
+                  options.programs.waybar.settings = lib.mkOption {
+                    type = lib.types.attrsOf (
+                      lib.types.submodule {
+                        freeformType = lib.types.attrsOf lib.types.anything;
+                        options."modules-left" = lib.mkOption {
+                          type = lib.types.listOf lib.types.str;
+                          default = [ ];
+                        };
+                        options."modules-center" = lib.mkOption {
+                          type = lib.types.listOf lib.types.str;
+                          default = [ ];
+                        };
+                        options."modules-right" = lib.mkOption {
+                          type = lib.types.listOf lib.types.str;
+                          default = [ ];
+                        };
+                      }
+                    );
+                    default = { };
+                  };
+                }
+              )
+              (import ./nix/home-manager.nix { inherit self; })
+              {
+                programs.d2b-wlcontrol = {
+                  enable = true;
+                  launcherOverrides = [
+                    {
+                      target = "tools.host.d2b";
+                      itemId = "firefox";
+                      name = "Web";
+                      icon = "language";
+                    }
+                  ];
+                  waybar = {
+                    enable = true;
+                    modulesList = "modules-left";
+                    icon = "◇";
+                    label = "d2b";
+                    clickAction = "d2b-wlcontrol open";
+                    module."on-click-right" = "d2b-wlcontrol action refresh";
+                  };
+                };
+                programs.waybar.enable = true;
+                programs.waybar.settings.mainBar.modules-left = [ "clock" ];
+              }
+            ];
+          };
+          renderedModule =
+            builtins.toJSON hmEval.config.programs.waybar.settings.mainBar."custom/d2b-wlcontrol";
+          renderedStyle =
+            pkgs.writeText "d2b-wlcontrol-waybar-style.css" hmEval.config.programs.waybar.style;
+        in
+        {
+          package = self.packages.${system}.default;
+          home-manager-module = pkgs.runCommand "d2b-wlcontrol-home-manager-module" { } ''
+            config=${hmEval.config.xdg.configFile."d2b-wlcontrol/config.toml".source}
+            grep -q 'public_socket = "/run/d2b/public.sock"' "$config"
+            grep -q 'icon = "◇"' "$config"
+            grep -q 'label = "d2b"' "$config"
+            grep -q 'target = "tools.host.d2b"' "$config"
+            grep -q 'item_id = "firefox"' "$config"
+            printf '%s' '${renderedModule}' | ${pkgs.jq}/bin/jq -e '
+              .exec | contains("d2b-wlcontrol waybar")
+            ' >/dev/null
+            printf '%s' '${renderedModule}' | ${pkgs.jq}/bin/jq -e '
+              has("interval") | not
+            ' >/dev/null
+            printf '%s' '${builtins.toJSON hmEval.config.programs.waybar.settings}' \
+              | grep -q '"modules-left":\["clock","custom/d2b-wlcontrol"\]'
+            grep -q '#custom-d2b-wlcontrol.unsafe-local' ${renderedStyle}
+            touch $out
+          '';
         }
       );
 
@@ -91,5 +207,7 @@
       );
 
       formatter = forAllSystems (system: (pkgsFor system).nixfmt-rfc-style);
+
+      homeManagerModules.default = import ./nix/home-manager.nix { inherit self; };
     };
 }

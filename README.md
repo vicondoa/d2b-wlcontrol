@@ -1,135 +1,124 @@
 # d2b-wlcontrol
 
-A clean, Waybar-styled indicator and control center for
-[d2b: Double Dutch Bus](https://github.com/vicondoa/d2b), built for a
-niri / Wayland desktop where multiple worlds share one desktop.
+A Waybar indicator and Quickshell control center for
+[d2b](https://github.com/vicondoa/d2b) on niri and other Wayland
+desktops.
 
-`d2b-wlcontrol` shows which d2b realms are running and surfaces the
-controls a d2b operator can already drive — start / stop / restart,
-detached terminal launch, attach / detach USB, audio mic/speaker/level
-controls, verify / build / boot / switch, and observability portal open —
-without ever touching anything privileged. It talks only to the d2bd
-**public** socket and, where it is the better boundary, the official `d2b`
-CLI.
+`d2b-wlcontrol` consumes d2b's public workload inventory and groups local VMs,
+provider-managed workloads, and explicitly unsafe host workloads by realm. It
+keeps the existing VM lifecycle, USB, store, audio, and guest-terminal controls
+while rendering configured workload launchers without private files or
+VM-shaped assumptions.
 
-The reduced VM model includes d2b-provided canonical realm targets when the
-daemon exposes them, and falls back to `<vm>.local.d2b` for local VMs during the
-realm-native transition. UI code should treat that field as trusted d2b
-identity and keep guest app ids/titles as presentation hints only.
+## Highlights
 
-> Status: the Waybar indicator, the live d2bd public-socket client,
-> the reduced status model, auth-gated action planning, Quickshell
-> layer-shell popup, d2b audio controls, and shared toolkit-backed
-> protocol / Waybar helpers are all in place.
+- **Public workload cards.** Canonical target, provider, isolation/execution
+  posture, availability, and every configured `exec` or `shell` item come from
+  d2bd's public socket.
+- **Generic launcher items.** Each item owns its label and icon. Browser,
+  observability, terminal, and application entries are ordinary configured
+  items rather than hardcoded UI variants.
+- **Honest unsafe-local UX.** All-unsafe cards carry one card warning; mixed
+  cards warn only on unsafe rows. The UI says that these processes have no
+  isolation and live for the user-manager lifetime. VM lifecycle, build/switch,
+  storage, USB, audio, and arbitrary guest-exec controls are not shown for
+  unsafe-local rows.
+- **Actionable readiness.** Missing/stale helpers, unavailable user managers,
+  inactive graphical sessions, Wayland failures, and proxy failures explain the
+  remediation instead of silently failing.
+- **Safe dispatch.** Configured exec uses exact argv
+  `d2b launch <target> --item <id>`. Shell items use the configured
+  `d2b-wlterm open <target> <item-id>` persistent-shell boundary. No shell
+  interpolation is used.
+- **Waybar contract.** The module self-loops and emits one newline-terminated
+  JSON object per refresh with bounded classes. Unsafe posture may add only the
+  stable `unsafe-local` / `mixed-isolation` classes.
+- **d2b colors.** Realm accents and VM/state colors still use d2b's public UI
+  color metadata; neutral popup colors remain independently configurable and
+  Stylix-agnostic.
 
-## What it does
+## Trust boundary
 
-- **Glanceable status in Waybar** — a compact `◆ 2/4` style indicator
-  with state-driven CSS classes (`all-running`, `partial-running`,
-  `attention`, `daemon-down`, `auth-denied`) and a per-VM tooltip that
-  includes a realm-grouped quick-launch section when launcher metadata is
-  present.
-- **A Quickshell layer-shell control popup** — per-VM cards with lifecycle
-  controls, graceful stop as the primary Stop action, detached terminal launch,
-  USB attach/detach, audio mic/speaker toggles, speaker volume / mic gain
-  sliders, store verify/build/boot/switch icons, config-driven quick-launch
-  icons, and an observability portal button, all gated on your effective d2b
-  authorization.
-- **Realm-grouped workload launcher panel** — when d2b's
-  `realm-workloads-launcher.json` is readable, wlcontrol groups quick-launch
-  buttons by realm. Each group's outer border uses the realm's accent color
-  (from `ui-colors.json` or the d2b palette hash). Inner workload borders use
-  theme defaults. When multiple workloads in a realm share the same icon a
-  chooser is presented before launching.
-- **d2b-native colors** — Waybar CSS consumes d2b's generated
-  `/etc/d2b/ui-colors.css` GTK `@define-color` names, while the popup
-  keeps neutral shell colors local and consumes `/etc/d2b/ui-colors.json`
-  for colored accent/border surfaces.
-- **Safe by construction** — public socket only; no broker socket, no
-  `sudo`, no direct state-file mutation, argv-only command execution.
-
-Audio controls use d2b's daemon-native public audio surface. They never read or
-write d2b audio state files directly and stay disabled with an explanation when
-the connected daemon is too old, the VM has no audio capability, or the
-provider reports degraded/unsupported audio enforcement.
+The control center talks to `/run/d2b/public.sock`, invokes the official `d2b`
+CLI for exact configured launch/build boundaries, invokes `d2b-wlterm` for
+persistent shells, and uses the configured browser opener. It never contacts
+the broker socket, invokes `sudo`, reads private helper state, or reads
+root-owned d2b launcher/state files.
 
 ## Install
 
-`d2b-wlcontrol` is a Nix flake.
+```nix
+{
+  inputs.d2b-toolkit.url =
+    "github:vicondoa/d2b-toolkit/fde6af8b842718e7150f5056d4eba73093d4ad77";
+  inputs.d2b-toolkit.inputs.nixpkgs.follows = "nixpkgs";
 
-```bash
-# Run it directly
-nix run github:vicondoa/d2b-wlcontrol -- status-json
-
-# Or add it as an input and install the package
-#   inputs.d2b-toolkit.url = "github:vicondoa/d2b-toolkit";
-#   inputs.d2b-toolkit.inputs.nixpkgs.follows = "nixpkgs";
-#   inputs.d2b-wlcontrol.url = "github:vicondoa/d2b-wlcontrol";
-#   inputs.d2b-wlcontrol.inputs.nixpkgs.follows = "nixpkgs";
-#   inputs.d2b-wlcontrol.inputs.d2b-toolkit.follows = "d2b-toolkit";
-# then add `d2b-wlcontrol.packages.${system}.default` to your packages.
+  inputs.d2b-wlcontrol.url = "github:vicondoa/d2b-wlcontrol";
+  inputs.d2b-wlcontrol.inputs.nixpkgs.follows = "nixpkgs";
+  inputs.d2b-wlcontrol.inputs.d2b-toolkit.follows = "d2b-toolkit";
+}
 ```
 
-For development:
+Install `inputs.d2b-wlcontrol.packages.${system}.default`, or use the host Home
+Manager module:
+
+```nix
+{
+  imports = [ inputs.d2b-wlcontrol.homeManagerModules.default ];
+
+  programs.d2b-wlcontrol = {
+    enable = true;
+    waybar = {
+      enable = true;
+      modulesList = "modules-right";
+      icon = "◆";
+      label = "";
+    };
+  };
+}
+```
+
+The module installs wlcontrol, writes its TOML, installs the starter Waybar CSS,
+injects the custom module without an `interval`, and preserves module placement,
+click-action, icon/label, CSS, and launcher-item overrides. It is a host module;
+it does not import d2b's guest-only Home Manager component.
+
+## Waybar and niri
+
+Without Home Manager:
 
 ```bash
-nix develop          # rust toolchain + quickshell
+d2b-wlcontrol print-waybar-config
+d2b-wlcontrol print-css
+```
+
+Install the package on `PATH`, add `custom/d2b-wlcontrol` to a Waybar module
+list, and do not configure `interval`. Left-click toggles the native
+Quickshell layer-shell popup; no niri window rule or XWayland is required.
+
+## Development
+
+```bash
+export PATH="$(echo ~/.rustup/toolchains/1.94.1-*/bin):/home/paydro/.nix-profile/bin:$PATH"
+export CARGO_BUILD_RUSTC_WRAPPER=''
+export CARGO_TARGET_DIR=/home/paydro/.cache/d2b-wlcontrol-target
+
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+nix flake check --no-build --all-systems
 ```
-
-## Waybar setup
-
-The Waybar module and its click bindings invoke the `d2b-wlcontrol`
-binary by name, so **install the package** (so it is on your `PATH`)
-rather than relying on `nix run` for the bar. Then print a starter
-module config and CSS:
-
-```bash
-d2b-wlcontrol print-waybar-config   # add to your Waybar "modules" + a "modules-*" array
-d2b-wlcontrol print-css             # append to your style.css
-```
-
-The module is a continuous custom module — it loops and emits one JSON
-line per refresh, so do **not** give it an `interval`. Left-click opens
-the control center, right-click cycles the display mode, middle-click
-refreshes. See [docs/waybar.md](./docs/waybar.md).
-
-## niri setup
-
-No niri window rule is required: `d2b-wlcontrol open` uses
-Quickshell's layer-shell surface as a draggable top-right popup. See
-[docs/niri.md](./docs/niri.md).
-
-## Configuration
-
-Configuration is TOML at
-`${XDG_CONFIG_HOME:-~/.config}/d2b-wlcontrol/config.toml`. All
-defaults are sane; common overrides are the detached guest terminal command and
-observability URL.
-See [docs/configuration.md](./docs/configuration.md).
-
-The realm-grouped launcher panel reads
-`/etc/d2b/realm-workloads-launcher.json` by default. Override with:
-
-```toml
-launcher_metadata_path = "/etc/d2b/realm-workloads-launcher.json"
-```
-
-Set to `""` to disable realm grouping entirely.
-
-The flake follows the shared d2b toolkit input for public-socket framing,
-Waybar JSON, color parsing, and broker-socket refusal. Keep the toolkit follow
-line when pinning `d2b`, `d2b-wlterm`, and `d2b-wlcontrol` together.
 
 ## Documentation
 
-- [docs/configuration.md](./docs/configuration.md) — config options.
-- [docs/controls.md](./docs/controls.md) — the action matrix + auth gating.
-- [docs/waybar.md](./docs/waybar.md) — Waybar module + styling.
-- [docs/niri.md](./docs/niri.md) — niri / Wayland integration.
-- [docs/security.md](./docs/security.md) — trust boundary + command safety.
-- [AGENTS.md](./AGENTS.md) — contributor / agent operating manual.
+- [Configuration](docs/configuration.md)
+- [Controls](docs/controls.md)
+- [Waybar](docs/waybar.md)
+- [niri / Wayland](docs/niri.md)
+- [Security](docs/security.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Contributor manual](AGENTS.md)
 
 ## License
 
-[Apache-2.0](./LICENSE).
+[Apache-2.0](LICENSE)

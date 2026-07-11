@@ -13,12 +13,16 @@ pub mod reduce;
 pub mod sources;
 
 pub use config::{
-    is_public_socket_path, load_ui_colors_from_path, Config, UiColorArtifact, UiColorBorder,
-    UiColorEnv, UiColorHost, UiColorStates, UiColorVm, DEFAULT_COLOR_ARTIFACT_PATH,
+    is_public_socket_path, load_ui_colors_from_path, Config, LauncherOverride, UiColorArtifact,
+    UiColorBorder, UiColorEnv, UiColorHost, UiColorStates, UiColorVm, WaybarConfig,
+    DEFAULT_COLOR_ARTIFACT_PATH,
 };
 pub use error::{WlError, WlResult};
 pub use model::{
-    ActionAvailability, ActionKind, AuthRole, Connectivity, PlannedAction, RealmGroup,
-    RealmLauncherEntry, RuntimeState, SocketIntent, Unavailable, UsbClaim, Vm, VmFeatures, WlState,
+    ActionAvailability, ActionKind, AuthRole, Connectivity, EnvironmentPosture,
+    ExecutionIdentityPosture, IsolationPosture, LauncherIcon, LauncherItemKind,
+    LauncherItemSummary, PlannedAction, RealmGroup, RealmLauncherEntry, RuntimeState,
+    SessionPersistencePosture, SocketIntent, Unavailable, UsbClaim, Vm, VmFeatures, WlState,
+    WorkloadAvailability, WorkloadExecutionPosture, WorkloadProviderKind, WorkloadRuntimeState,
 };
-pub use realm_launcher::{build_realm_groups, load_launcher_artifact, LauncherWorkload};
+pub use realm_launcher::build_realm_groups;

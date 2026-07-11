@@ -1,9 +1,4 @@
 //! User configuration for d2b-wlcontrol.
-//!
-//! Owning wave: **Wave 1 — Core model agent**. Wave 0 ships a minimal,
-//! compiling skeleton with sane defaults and the on-disk location contract.
-//! The Wave 1 agent fleshes out validation, terminal-argv parsing rules,
-//! favorites/ordering, and the full option surface described in the plan.
 
 use std::{collections::BTreeMap, path::Path};
 
@@ -16,7 +11,6 @@ use crate::error::{WlError, WlResult};
 /// Default config file location: `${XDG_CONFIG_HOME:-~/.config}/d2b-wlcontrol/config.toml`.
 pub const CONFIG_RELATIVE_PATH: &str = "d2b-wlcontrol/config.toml";
 pub const DEFAULT_COLOR_ARTIFACT_PATH: &str = "/etc/d2b/ui-colors.json";
-pub const DEFAULT_LAUNCHER_METADATA_PATH: &str = "/etc/d2b/realm-workloads-launcher.json";
 
 const PRIVILEGED_BROKER_SOCKET_MESSAGE: &str =
     "refusing to use the privileged broker socket; d2b-wlcontrol speaks only the public socket";
@@ -55,19 +49,18 @@ pub struct Config {
     pub hidden_vms: Vec<String>,
     /// Terminal launch configuration.
     pub terminal: TerminalConfig,
+    /// Waybar indicator presentation.
+    pub waybar: WaybarConfig,
     /// Observability portal launch configuration.
     pub observability: ObservabilityConfig,
     /// Shell palette for the Quickshell popup.
     pub theme: ThemeConfig,
     /// Per-VM custom guest quick-launch icons.
     pub quick_launch: Vec<QuickLaunchConfig>,
+    /// Presentation-only overrides for public workload launcher items.
+    pub launcher_overrides: Vec<LauncherOverride>,
     /// Path to d2b's resolved UI color JSON artifact.
     pub color_artifact_path: String,
-    /// Path to d2b's realm workload launcher metadata artifact.
-    ///
-    /// Set to an empty string to disable realm grouping. When the file is
-    /// absent on disk the reducer degrades gracefully (empty `realm_groups`).
-    pub launcher_metadata_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +133,16 @@ pub struct TerminalConfig {
     pub guest_shell: String,
     /// Guest argv launched detached inside the VM.
     pub guest_argv: Vec<String>,
+    /// Host launcher argv prefix for persistent workload shells.
+    pub wlterm_argv: Vec<String>,
+}
+
+/// Bounded Waybar icon and label presentation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub struct WaybarConfig {
+    pub icon: String,
+    pub label: String,
 }
 
 /// Observability portal configuration. Opening the browser is argv-only and
@@ -194,6 +197,16 @@ pub struct QuickLaunchConfig {
     pub guest_argv: Vec<String>,
 }
 
+/// User presentation override for one public launcher item.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub struct LauncherOverride {
+    pub target: String,
+    pub item_id: String,
+    pub name: Option<String>,
+    pub icon: Option<String>,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -205,11 +218,12 @@ impl Default for Config {
             favorites: Vec::new(),
             hidden_vms: Vec::new(),
             terminal: TerminalConfig::default(),
+            waybar: WaybarConfig::default(),
             observability: ObservabilityConfig::default(),
             theme: ThemeConfig::default(),
             quick_launch: Vec::new(),
+            launcher_overrides: Vec::new(),
             color_artifact_path: DEFAULT_COLOR_ARTIFACT_PATH.to_owned(),
-            launcher_metadata_path: DEFAULT_LAUNCHER_METADATA_PATH.to_owned(),
         }
     }
 }
@@ -220,6 +234,16 @@ impl Default for TerminalConfig {
             argv: vec!["foot".to_owned(), "--".to_owned()],
             guest_shell: "bash".to_owned(),
             guest_argv: vec!["/run/current-system/sw/bin/foot".to_owned()],
+            wlterm_argv: vec!["d2b-wlterm".to_owned(), "open".to_owned()],
+        }
+    }
+}
+
+impl Default for WaybarConfig {
+    fn default() -> Self {
+        Self {
+            icon: "◆".to_owned(),
+            label: String::new(),
         }
     }
 }
@@ -282,6 +306,20 @@ impl Config {
                 "terminal.guest_argv must contain at least one argv element".into(),
             ));
         }
+        if self.terminal.wlterm_argv.is_empty() {
+            return Err(WlError::Config(
+                "terminal.wlterm_argv must contain at least one argv element".into(),
+            ));
+        }
+        if self.waybar.icon.chars().any(char::is_control)
+            || self.waybar.icon.chars().count() > 8
+            || self.waybar.label.chars().any(char::is_control)
+            || self.waybar.label.chars().count() > 32
+        {
+            return Err(WlError::Config(
+                "waybar icon/label must be bounded printable text".into(),
+            ));
+        }
         if self.observability.enabled
             && self.observability.url.is_some()
             && self.observability.browser_argv.is_empty()
@@ -320,27 +358,31 @@ impl Config {
                 ));
             }
         }
+        for item in &self.launcher_overrides {
+            if item.target.trim().is_empty() || item.item_id.trim().is_empty() {
+                return Err(WlError::Config(
+                    "launcher_overrides target and item_id must not be empty".into(),
+                ));
+            }
+            if item
+                .name
+                .as_deref()
+                .is_some_and(|name| name.trim().is_empty())
+                || item
+                    .icon
+                    .as_deref()
+                    .is_some_and(|icon| icon.trim().is_empty())
+            {
+                return Err(WlError::Config(
+                    "launcher_overrides name/icon must not be empty when set".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
     pub fn load_ui_colors(&self) -> WlResult<Option<UiColorArtifact>> {
         load_ui_colors_from_path(Path::new(&self.color_artifact_path))
-    }
-
-    /// Load the realm workload launcher metadata artifact, if configured.
-    ///
-    /// Returns `Ok(None)` when `launcher_metadata_path` is empty (disabled).
-    /// Returns `Ok(Some(vec![]))` when the file is absent. Only returns an
-    /// error for malformed JSON.
-    pub fn load_launcher_metadata(
-        &self,
-    ) -> WlResult<Option<Vec<crate::realm_launcher::LauncherWorkload>>> {
-        if self.launcher_metadata_path.trim().is_empty() {
-            return Ok(None);
-        }
-        crate::realm_launcher::load_launcher_artifact(Path::new(&self.launcher_metadata_path))
-            .map(Some)
-            .map_err(WlError::Config)
     }
 
     /// Resolve the default config path under `$XDG_CONFIG_HOME`.
@@ -519,6 +561,9 @@ mod tests {
         assert!(c.hidden_vms.is_empty());
         assert_eq!(c.terminal.guest_shell, "bash");
         assert_eq!(c.terminal.guest_argv, ["/run/current-system/sw/bin/foot"]);
+        assert_eq!(c.terminal.wlterm_argv, ["d2b-wlterm", "open"]);
+        assert_eq!(c.waybar.icon, "◆");
+        assert!(c.waybar.label.is_empty());
         assert!(c.observability.enabled);
         assert_eq!(c.observability.url.as_deref(), Some("http://sys-obs:8080"));
         assert_eq!(c.observability.browser_argv, ["xdg-open"]);
@@ -529,6 +574,7 @@ mod tests {
         assert_eq!(c.theme.background, "#0f1117");
         assert_eq!(c.theme.foreground_strong, "#ffffff");
         assert!(c.quick_launch.is_empty());
+        assert!(c.launcher_overrides.is_empty());
     }
 
     #[test]
@@ -608,7 +654,8 @@ background = "#ABCDEF"
 
     #[test]
     fn missing_color_artifact_uses_no_colors() {
-        let colors = load_ui_colors_from_path(Path::new("/tmp/d2b-wlcontrol-missing-colors.json"))
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("missing-ui-colors.json");
+        let colors = load_ui_colors_from_path(&path)
             .expect("missing d2b color artifact should not abort wlcontrol");
         assert_eq!(colors, None);
     }
@@ -750,6 +797,26 @@ tooltip = "Broken"
         )
         .expect_err("quick launch without argv should fail");
         assert!(matches!(err, WlError::Config(msg) if msg.contains("quick_launch.guest_argv")));
+    }
+
+    #[test]
+    fn parses_wlterm_and_launcher_item_overrides() {
+        let config = Config::from_toml(
+            r#"
+[terminal]
+wlterm_argv = ["custom-wlterm", "open"]
+
+[[launcher_overrides]]
+target = "tools.host.d2b"
+item_id = "firefox"
+name = "Web"
+icon = "language"
+"#,
+        )
+        .expect("parse launcher override");
+        assert_eq!(config.terminal.wlterm_argv, ["custom-wlterm", "open"]);
+        assert_eq!(config.launcher_overrides.len(), 1);
+        assert_eq!(config.launcher_overrides[0].name.as_deref(), Some("Web"));
     }
 
     #[test]

@@ -1,11 +1,5 @@
 //! Waybar custom-module rendering.
 //!
-//! Owning wave: **Wave 2 — Waybar module agent**. Wave 0 ships a working
-//! baseline that produces a valid single-object Waybar JSON line with stable
-//! CSS classes so the bar shows real state immediately. The Wave 2 agent
-//! refines the compact/detail formats, tooltip richness, and display-mode
-//! cycling.
-//!
 //! Waybar custom-module contract (`return-type = "json"`): one newline-
 //! terminated JSON object per update with `text`, `class`, and `tooltip`.
 
@@ -58,27 +52,57 @@ pub fn render(state: &WlState) -> WaybarLine {
 
 /// Render the Waybar line for the requested display mode.
 pub fn render_mode(state: &WlState, mode: DisplayMode) -> WaybarLine {
+    render_mode_with_presentation(state, mode, "◆", "")
+}
+
+/// Render with a bounded user-configured icon and label.
+pub fn render_mode_with_presentation(
+    state: &WlState,
+    mode: DisplayMode,
+    icon: &str,
+    label: &str,
+) -> WaybarLine {
+    let prefix = presentation_prefix(icon, label);
     match state.connectivity {
         Connectivity::DaemonDown => WaybarLine {
-            text: "◆ down".to_owned(),
+            text: format!("{prefix} down"),
             class: state_classes(state),
             tooltip: render_tooltip(state),
         },
         Connectivity::AuthDenied => WaybarLine {
-            text: "◆ auth".to_owned(),
+            text: format!("{prefix} auth"),
             class: state_classes(state),
             tooltip: render_tooltip(state),
         },
-        Connectivity::Connected => render_connected(state, mode),
+        Connectivity::Connected => render_connected(state, mode, &prefix),
     }
 }
 
-fn render_connected(state: &WlState, mode: DisplayMode) -> WaybarLine {
+fn presentation_prefix(icon: &str, label: &str) -> String {
+    let icon = icon
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(8)
+        .collect::<String>();
+    let label = label
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(32)
+        .collect::<String>();
+    match (icon.trim(), label.trim()) {
+        ("", "") => "◆".to_owned(),
+        ("", label) => label.to_owned(),
+        (icon, "") => icon.to_owned(),
+        (icon, label) => format!("{icon} {label}"),
+    }
+}
+
+fn render_connected(state: &WlState, mode: DisplayMode, prefix: &str) -> WaybarLine {
     let running = state.running_count();
     let total = state.visible_count();
     let attention = state.needs_attention();
 
-    let mut text = compact_text(running, total, attention);
+    let mut text = compact_text(prefix, running, total, attention);
     if mode == DisplayMode::Detail {
         text = detail_text(state, &text);
     }
@@ -90,8 +114,8 @@ fn render_connected(state: &WlState, mode: DisplayMode) -> WaybarLine {
     }
 }
 
-fn compact_text(running: usize, total: usize, attention: bool) -> String {
-    let mut text = format!("◆ {running}/{total}");
+fn compact_text(prefix: &str, running: usize, total: usize, attention: bool) -> String {
+    let mut text = format!("{prefix} {running}/{total}");
     if attention {
         text.push_str(" !");
     }
@@ -136,6 +160,21 @@ fn state_classes(state: &WlState) -> Vec<String> {
     if state.stale {
         class.push("stale".to_owned());
     }
+    if state.realm_groups.iter().any(|group| {
+        group
+            .workloads
+            .iter()
+            .any(|workload| workload.is_unsafe_local())
+    }) {
+        class.push("unsafe-local".to_owned());
+    }
+    if state
+        .realm_groups
+        .iter()
+        .any(RealmGroup::has_mixed_isolation)
+    {
+        class.push("mixed-isolation".to_owned());
+    }
     class
 }
 
@@ -170,14 +209,6 @@ fn render_tooltip(state: &WlState) -> String {
 
 /// Render the realm quick-launch panel section as a tooltip block.
 ///
-/// Each realm group is rendered with:
-///   [realm-name] icon1 · icon2 · (icon3 ↕ chooser) …
-///
-/// Entries with icon collisions are annotated with ` (↕)` to signal that
-/// activating them opens a chooser. The outer group color is carried in the
-/// `realm_color` field for compositor/CSS layers; in plain Waybar text it
-/// appears as a parenthesized hex annotation.
-///
 /// Returns an empty string when there are no realm groups.
 pub fn render_realm_quick_launch_section(groups: &[RealmGroup]) -> String {
     if groups.is_empty() {
@@ -189,27 +220,55 @@ pub fn render_realm_quick_launch_section(groups: &[RealmGroup]) -> String {
         if group.workloads.is_empty() {
             continue;
         }
-        let entries: Vec<String> = group
-            .workloads
-            .iter()
-            .map(|entry| {
-                if entry.has_icon_collision {
-                    // Chooser required: annotate with ↕ siblings count.
-                    let n = entry.icon_siblings.len() + 1;
-                    format!("[{}↕{n}]", entry.icon)
-                } else {
-                    format!("[{}]", entry.icon)
-                }
-            })
-            .collect();
+        let warning = if group.all_unsafe_local() {
+            " · unsafe-local: no isolation, user-manager lifetime"
+        } else {
+            ""
+        };
         lines.push(format!(
-            "{} ({}): {}",
-            group.realm_name,
-            group.realm_color,
-            entries.join(" · ")
+            "{} ({}){warning}",
+            group.realm_name, group.realm_color
         ));
+        for workload in &group.workloads {
+            let items = workload
+                .launcher_items
+                .iter()
+                .map(|item| format!("[{} {}]", item.icon.preferred(), item.name))
+                .collect::<Vec<_>>();
+            let row_warning = if group.has_mixed_isolation() && workload.is_unsafe_local() {
+                " · unsafe-local: no isolation, user-manager lifetime"
+            } else {
+                ""
+            };
+            let provider = if group.all_unsafe_local() {
+                String::new()
+            } else {
+                format!(" [{}]", provider_label(workload.provider_kind))
+            };
+            lines.push(format!(
+                "  {}{provider}{row_warning}: {}",
+                workload.label,
+                items.join(" · ")
+            ));
+            if let Some(remediation) = workload.availability.remediation().filter(|_| {
+                workload.availability != wlcontrol_core::model::WorkloadAvailability::Ready
+            }) {
+                lines.push(format!("    {remediation}"));
+            }
+        }
     }
     lines.join("\n")
+}
+
+fn provider_label(kind: wlcontrol_core::model::WorkloadProviderKind) -> &'static str {
+    use wlcontrol_core::model::WorkloadProviderKind;
+    match kind {
+        WorkloadProviderKind::LocalVm => "local-vm",
+        WorkloadProviderKind::QemuMedia => "qemu-media",
+        WorkloadProviderKind::ProviderManaged => "provider-managed",
+        WorkloadProviderKind::UnsafeLocal => "unsafe-local",
+        WorkloadProviderKind::Unknown => "unknown",
+    }
 }
 
 fn visible_vms(state: &WlState) -> impl Iterator<Item = &Vm> {
@@ -327,8 +386,9 @@ fn role_label(role: AuthRole) -> &'static str {
 mod tests {
     use super::*;
     use wlcontrol_core::model::{
-        AudioChannelState, AudioEnforcementPosture, AudioProviderKind, RealmLauncherEntry,
-        UsbClaim, VmAudioState, VmFeatures,
+        AudioChannelState, AudioEnforcementPosture, AudioProviderKind, LauncherIcon,
+        LauncherItemKind, LauncherItemSummary, RealmLauncherEntry, UsbClaim, VmAudioState,
+        VmFeatures, WorkloadAvailability, WorkloadProviderKind,
     };
 
     fn vm(name: &str, state: RuntimeState, net: bool) -> Vm {
@@ -364,6 +424,20 @@ mod tests {
             } else {
                 vec![]
             },
+            provider_kind: WorkloadProviderKind::LocalVm,
+            availability: WorkloadAvailability::Ready,
+            launcher_items: vec![LauncherItemSummary {
+                id: action_id.to_owned(),
+                name: action_id.to_owned(),
+                icon: LauncherIcon {
+                    id: Some(icon.to_owned()),
+                    name: None,
+                },
+                kind: LauncherItemKind::Exec,
+                graphical: true,
+                capabilities: vec!["configured-launch".to_owned()],
+            }],
+            ..Default::default()
         }
     }
 
@@ -643,12 +717,15 @@ mod tests {
         ];
         let section = render_realm_quick_launch_section(&groups);
         assert!(section.contains("— realm launchers —"));
-        assert!(section.contains("work (#90d090): [web] · [terminal]"));
-        assert!(section.contains("personal (#7fc8ff): [music_note]"));
+        assert!(section.contains("work (#90d090)"));
+        assert!(section.contains("[web browser]"));
+        assert!(section.contains("[terminal terminal]"));
+        assert!(section.contains("personal (#7fc8ff)"));
+        assert!(section.contains("[music_note music]"));
     }
 
     #[test]
-    fn realm_quick_launch_section_annotates_icon_collisions() {
+    fn realm_quick_launch_section_renders_generic_item_names_despite_icon_collisions() {
         let groups = vec![RealmGroup {
             realm_name: "work".to_owned(),
             realm_id: "work".to_owned(),
@@ -660,12 +737,12 @@ mod tests {
             ],
         }];
         let section = render_realm_quick_launch_section(&groups);
-        // Colliding entries carry ↕ and sibling count.
-        assert!(section.contains("[web↕2]"), "section: {section}");
-        // Non-colliding entry has no annotation.
-        assert!(section.contains("[terminal]"), "section: {section}");
-        // Both collisions are present.
-        assert_eq!(section.matches("[web↕2]").count(), 2);
+        assert!(section.contains("[web browser]"), "section: {section}");
+        assert!(section.contains("[web mail]"), "section: {section}");
+        assert!(
+            section.contains("[terminal terminal]"),
+            "section: {section}"
+        );
     }
 
     #[test]
@@ -685,7 +762,8 @@ mod tests {
         };
         let line = render(&state);
         assert!(line.tooltip.contains("— realm launchers —"));
-        assert!(line.tooltip.contains("work (#90d090): [web]"));
+        assert!(line.tooltip.contains("work (#90d090)"));
+        assert!(line.tooltip.contains("[web browser]"));
     }
 
     #[test]
@@ -698,5 +776,79 @@ mod tests {
         };
         let line = render(&state);
         assert!(!line.tooltip.contains("— realm launchers —"));
+    }
+
+    #[test]
+    fn unsafe_local_uses_only_bounded_classes_and_actionable_tooltip() {
+        let mut entry = realm_entry("firefox", "web-browser", false);
+        entry.provider_kind = WorkloadProviderKind::UnsafeLocal;
+        entry.availability = WorkloadAvailability::HelperUnavailable;
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Launcher,
+            realm_groups: vec![RealmGroup {
+                realm_name: "host".to_owned(),
+                realm_id: "host".to_owned(),
+                realm_color: "#ff8080".to_owned(),
+                workloads: vec![entry],
+            }],
+            ..Default::default()
+        };
+        let line = render(&state);
+        assert!(line.class.contains(&"unsafe-local".to_owned()));
+        assert!(line.class.contains(&"attention".to_owned()));
+        assert!(!line.class.iter().any(|class| class.contains("firefox")));
+        assert!(!line.class.iter().any(|class| class.contains("host")));
+        assert!(line.tooltip.contains("no isolation"));
+        assert!(line.tooltip.contains("enable and start"));
+        assert_eq!(
+            line.tooltip.matches("unsafe-local: no isolation").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn presentation_icon_and_label_are_bounded_without_changing_json_shape() {
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Launcher,
+            ..Default::default()
+        };
+        let line = render_mode_with_presentation(
+            &state,
+            DisplayMode::Compact,
+            "◆◆◆◆◆◆◆◆◆◆",
+            "desktop-control-label-that-is-intentionally-too-long",
+        );
+        assert!(line.text.chars().count() < 50);
+        assert!(line.to_json_line().ends_with('\n'));
+    }
+
+    #[test]
+    fn unsafe_local_waybar_output_matches_golden() {
+        let mut entry = realm_entry("tools", "web-browser", false);
+        entry.label = "Host Tools".to_owned();
+        entry.provider_kind = WorkloadProviderKind::UnsafeLocal;
+        entry.availability = WorkloadAvailability::HelperUnavailable;
+        entry.launcher_items[0].name = "Firefox".to_owned();
+        entry.launcher_items[0].icon.name = Some("web-browser".to_owned());
+        let state = WlState {
+            connectivity: Connectivity::Connected,
+            role: AuthRole::Launcher,
+            realm_groups: vec![RealmGroup {
+                realm_name: "host".to_owned(),
+                realm_id: "host".to_owned(),
+                realm_color: "#ff8080".to_owned(),
+                workloads: vec![entry],
+            }],
+            ..Default::default()
+        };
+        let actual: serde_json::Value =
+            serde_json::from_str(render(&state).to_json_line().trim()).expect("Waybar JSON");
+        let expected: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/golden/unsafe-local-waybar.json"
+        ))
+        .expect("golden Waybar JSON");
+        assert_eq!(actual, expected);
     }
 }

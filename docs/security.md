@@ -1,62 +1,62 @@
 # Security model
 
-`d2b-wlcontrol` is a presentation + control surface. It holds no
-privilege of its own and is designed so a bug cannot escalate into a
-host compromise.
+`d2b-wlcontrol` is an unprivileged presentation and control client.
 
-## Trust boundary
+## Allowed boundaries
 
-The tool talks **only** to operator-facing surfaces:
+- d2bd's public `SOCK_SEQPACKET` socket, including public VM/audio/USB and
+  workload list/status operations;
+- exact official `d2b` argv for configured launch and build;
+- configured `d2b-wlterm` argv for persistent workload shells; and
+- the configured browser opener.
 
-- the d2bd **public** socket `/run/d2b/public.sock`
-  (non-abstract `SOCK_SEQPACKET`, 4-byte little-endian length-prefixed
-  JSON frames, `SO_PEERCRED` authorization); and
-- the official `d2b` CLI, used only where it is the better boundary
-  (detached guest terminal exec and non-shell build); and
-- the configured browser opener for the observability URL.
+Public-socket authorization remains `SO_PEERCRED` plus d2b's reported role.
+Wlcontrol never infers privilege from filesystem permissions.
 
-Authorization is whatever d2bd grants the calling user via
-`SO_PEERCRED` + group membership. `d2b-wlcontrol` adds **no**
-privilege and enforces no policy of its own beyond hiding controls the
-daemon would reject anyway.
+## Forbidden boundaries
 
-The public-socket frame bounds, hello negotiation shape, broker-socket
-classification, Waybar JSON shape, color parsing, and redacted argv helpers are
-shared with the d2b desktop toolkit. That keeps downstream desktop integrations
-on the same protocol and redaction rules without adding any privileged surface.
-When co-installing with other d2b desktop clients, keep
-`inputs.d2b-wlcontrol.inputs.d2b-toolkit.follows = "d2b-toolkit"` so the
-control center and launcher use the same toolkit revision.
+- `/run/d2b/priv.sock` or any helper/broker socket;
+- `sudo`, setuid helpers, `su`, or guessed user-session credentials;
+- root-owned d2b state, private launcher artifacts, helper registrations, argv,
+  environment, command output, or session records; and
+- shell command strings/interpolation.
 
-## Hard rules
+The only d2b file consumed for presentation is the public UI color metadata.
+It is never treated as authorization or policy.
 
-- **No broker socket.** Never connects to `/run/d2b/priv.sock`.
-- **No privilege escalation.** Never uses `sudo` or setuid paths.
-- **No direct state mutation.** Never reads or writes d2b's
-  root-owned state files (e.g. `audio-state.json`); all state changes go
-  through the public socket or the `d2b` CLI.
-- **argv-only execution.** Every spawned process is an argv vector. No
-  shell, no string interpolation, so VM names / bus ids / shell paths
-  can never become shell metacharacters.
-- **Auth from the daemon, not the filesystem.** Control availability is
-  derived from `d2b auth status`, never from inspecting file
-  permissions.
-- **No XWayland assumptions.**
-- **No observability credential handling.** The Signoz button opens a URL only;
-  auto-login/token/cookie handling is out of scope.
+## Configured launch
+
+Public launcher records contain identity, presentation, posture, capabilities,
+and item IDs—not executable paths or argv. Exec dispatch is the fixed vector:
+
+```text
+["d2b", "launch", TARGET, "--item", ITEM_ID]
+```
+
+Shell dispatch appends `TARGET` and `ITEM_ID` to a configured wlterm argv
+prefix. It never falls back to `d2b vm exec` for unsafe-local.
+
+## Unsafe-local means unsafe
+
+An unsafe-local provider executes as the authenticated host user and has no VM
+or provider isolation boundary. Its session follows the user's systemd manager.
+The realm rail and Wayland proxy identify the workload but do not sandbox it.
+
+Wlcontrol prevents misleading controls by omitting VM lifecycle, storage, USB,
+audio, build/switch, and arbitrary guest-exec actions from unsafe-local rows.
+This is UX defense-in-depth; d2bd remains the authorization and dispatch
+authority.
 
 ## Failure posture
 
-- `d2bd` unreachable → `daemon-down` state; mutating controls
-  disabled, not errored mid-flight.
-- Reachable but unauthorized → `auth-denied` state; read-only.
-- A failed refresh reuses the last state marked `stale` rather than
-  flapping to a false-healthy or empty view.
-- d2b typed errors and remediation text are surfaced to the
-  operator; raw command output and any secrets are never logged.
+- daemon unavailable: mutating controls disabled;
+- auth denied: read-only display;
+- helper stale/unavailable or user manager absent: launch disabled with
+  remediation;
+- Wayland/proxy unavailable: graphical launch disabled, never bypassed to the
+  host compositor;
+- failed launch process: non-zero status reaches the UI result boundary; and
+- failed refresh: cached state is marked stale rather than false-healthy.
 
-## Reporting
-
-Security concerns about `d2b-wlcontrol` should be reported privately
-to the repository owner. Issues in d2b itself belong in the
-[d2b](https://github.com/vicondoa/d2b) project.
+Waybar classes are fixed low-cardinality values. Raw targets, names, argv,
+paths, output, environment, and shell names are not metric/CSS labels.
