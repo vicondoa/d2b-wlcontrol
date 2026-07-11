@@ -1,17 +1,23 @@
-{ self ? null }:
-{ config, lib, pkgs, options, ... }:
+{
+  self ? null,
+}:
+{
+  config,
+  lib,
+  pkgs,
+  options,
+  ...
+}:
 
 let
   cfg = config.programs.d2b-wlcontrol;
   tomlFormat = pkgs.formats.toml { };
   packageForSystem =
-    if self != null && self ? packages && self.packages ? ${pkgs.stdenv.hostPlatform.system}
-    then self.packages.${pkgs.stdenv.hostPlatform.system}.default
-    else null;
-  executable =
-    if cfg.package != null
-    then lib.getExe cfg.package
-    else "d2b-wlcontrol";
+    if self != null && self ? packages && self.packages ? ${pkgs.stdenv.hostPlatform.system} then
+      self.packages.${pkgs.stdenv.hostPlatform.system}.default
+    else
+      null;
+  executable = if cfg.package != null then lib.getExe cfg.package else "d2b-wlcontrol";
   baseSettings = {
     public_socket = cfg.publicSocketPath;
     refresh_interval_ms = cfg.refreshIntervalMs;
@@ -20,14 +26,15 @@ let
       icon = cfg.waybar.icon;
       label = cfg.waybar.label;
     };
-    launcher_overrides = map
-      (item: {
+    launcher_overrides = map (
+      item:
+      {
         target = item.target;
         item_id = item.itemId;
       }
       // lib.optionalAttrs (item.name != null) { name = item.name; }
-      // lib.optionalAttrs (item.icon != null) { icon = item.icon; })
-      cfg.launcherOverrides;
+      // lib.optionalAttrs (item.icon != null) { icon = item.icon; }
+    ) cfg.launcherOverrides;
   };
   renderedSettings = lib.recursiveUpdate baseSettings cfg.settings;
   waybarModule = lib.recursiveUpdate {
@@ -46,9 +53,7 @@ let
     && options.programs.waybar ? enable
     && options.programs.waybar ? settings;
   waybarStyleAvailable =
-    options ? programs
-    && options.programs ? waybar
-    && options.programs.waybar ? style;
+    options ? programs && options.programs ? waybar && options.programs.waybar ? style;
 in
 {
   options.programs.d2b-wlcontrol = {
@@ -88,28 +93,30 @@ in
     launcherOverrides = lib.mkOption {
       default = [ ];
       description = "Presentation overrides for public configured launcher items.";
-      type = lib.types.listOf (lib.types.submodule {
-        options = {
-          target = lib.mkOption {
-            type = lib.types.str;
-            description = "Canonical workload target.";
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            target = lib.mkOption {
+              type = lib.types.str;
+              description = "Canonical workload target.";
+            };
+            itemId = lib.mkOption {
+              type = lib.types.str;
+              description = "Configured launcher item ID.";
+            };
+            name = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Optional display-name override.";
+            };
+            icon = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "Optional icon-name override.";
+            };
           };
-          itemId = lib.mkOption {
-            type = lib.types.str;
-            description = "Configured launcher item ID.";
-          };
-          name = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Optional display-name override.";
-          };
-          icon = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Optional icon-name override.";
-          };
-        };
-      });
+        }
+      );
     };
 
     waybar = {
@@ -128,7 +135,11 @@ in
       };
 
       modulesList = lib.mkOption {
-        type = lib.types.enum [ "modules-left" "modules-center" "modules-right" ];
+        type = lib.types.enum [
+          "modules-left"
+          "modules-center"
+          "modules-right"
+        ];
         default = "modules-right";
         description = "Waybar module list receiving the control indicator.";
       };
@@ -172,43 +183,52 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable (lib.mkMerge [
-    {
-      assertions = [
+  config = lib.mkIf cfg.enable (
+    lib.mkMerge [
+      {
+        assertions = [
+          {
+            assertion = cfg.package != null;
+            message = "programs.d2b-wlcontrol.package must be set when the module is imported without the flake output";
+          }
+        ];
+
+        home.packages = [ cfg.package ];
+
+        xdg.configFile."d2b-wlcontrol/config.toml".source =
+          tomlFormat.generate "d2b-wlcontrol-config.toml" renderedSettings;
+      }
+      (lib.mkIf cfg.waybar.enable {
+        xdg.configFile."d2b-wlcontrol/waybar-module.json".text =
+          builtins.toJSON { ${cfg.waybar.moduleName} = waybarModule; } + "\n";
+
+        xdg.configFile."d2b-wlcontrol/style.css".text = cfg.waybar.css;
+      })
+      (lib.mkIf
+        (
+          cfg.waybar.enable
+          && cfg.waybar.injectHomeManager
+          && waybarHmAvailable
+          && config.programs.waybar.enable
+        )
         {
-          assertion = cfg.package != null;
-          message = "programs.d2b-wlcontrol.package must be set when the module is imported without the flake output";
+          programs.waybar.settings.${cfg.waybar.barName} = {
+            ${cfg.waybar.moduleName} = waybarModule;
+            ${cfg.waybar.modulesList} = lib.mkAfter [ cfg.waybar.moduleName ];
+          };
         }
-      ];
-
-      home.packages = [ cfg.package ];
-
-      xdg.configFile."d2b-wlcontrol/config.toml".source =
-        tomlFormat.generate "d2b-wlcontrol-config.toml" renderedSettings;
-
-      xdg.configFile."d2b-wlcontrol/waybar-module.json".text =
-        builtins.toJSON { ${cfg.waybar.moduleName} = waybarModule; } + "\n";
-
-      xdg.configFile."d2b-wlcontrol/style.css".text = cfg.waybar.css;
-    }
-    (lib.mkIf (
-      cfg.waybar.enable
-      && cfg.waybar.injectHomeManager
-      && waybarHmAvailable
-      && config.programs.waybar.enable
-    ) {
-      programs.waybar.settings.${cfg.waybar.barName} = {
-        ${cfg.waybar.moduleName} = waybarModule;
-        ${cfg.waybar.modulesList} = lib.mkAfter [ cfg.waybar.moduleName ];
-      };
-    })
-    (lib.mkIf (
-      cfg.waybar.enable
-      && cfg.waybar.injectHomeManager
-      && waybarStyleAvailable
-      && config.programs.waybar.enable
-    ) {
-      programs.waybar.style = lib.mkAfter ("\n" + cfg.waybar.css);
-    })
-  ]);
+      )
+      (lib.mkIf
+        (
+          cfg.waybar.enable
+          && cfg.waybar.injectHomeManager
+          && waybarStyleAvailable
+          && config.programs.waybar.enable
+        )
+        {
+          programs.waybar.style = lib.mkAfter ("\n" + cfg.waybar.css);
+        }
+      )
+    ]
+  );
 }

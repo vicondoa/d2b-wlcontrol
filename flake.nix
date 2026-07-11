@@ -10,7 +10,11 @@
   };
 
   outputs =
-    { self, nixpkgs, d2b-toolkit }:
+    {
+      self,
+      nixpkgs,
+      d2b-toolkit,
+    }:
     let
       systems = [
         "x86_64-linux"
@@ -19,7 +23,11 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
       pkgsFor = system: import nixpkgs { inherit system; };
 
-      runtimeBins = pkgs: with pkgs; [ quickshell xdg-utils ];
+      runtimeBins =
+        pkgs: with pkgs; [
+          quickshell
+          xdg-utils
+        ];
       runtimeFonts = pkgs: with pkgs; [ material-symbols ];
     in
     {
@@ -77,55 +85,56 @@
         system:
         let
           pkgs = pkgsFor system;
+          hmOptionStubs =
+            { lib, ... }:
+            {
+              options.assertions = lib.mkOption {
+                type = lib.types.listOf lib.types.anything;
+                default = [ ];
+              };
+              options.home.packages = lib.mkOption {
+                type = lib.types.listOf lib.types.package;
+                default = [ ];
+              };
+              options.xdg.configFile = lib.mkOption {
+                type = lib.types.attrsOf lib.types.anything;
+                default = { };
+              };
+              options.programs.waybar.enable = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+              };
+              options.programs.waybar.style = lib.mkOption {
+                type = lib.types.lines;
+                default = "";
+              };
+              options.programs.waybar.settings = lib.mkOption {
+                type = lib.types.attrsOf (
+                  lib.types.submodule {
+                    freeformType = lib.types.attrsOf lib.types.anything;
+                    options."modules-left" = lib.mkOption {
+                      type = lib.types.listOf lib.types.str;
+                      default = [ ];
+                    };
+                    options."modules-center" = lib.mkOption {
+                      type = lib.types.listOf lib.types.str;
+                      default = [ ];
+                    };
+                    options."modules-right" = lib.mkOption {
+                      type = lib.types.listOf lib.types.str;
+                      default = [ ];
+                    };
+                  }
+                );
+                default = { };
+              };
+            };
+          hmModule = import ./nix/home-manager.nix { inherit self; };
           hmEval = pkgs.lib.evalModules {
             specialArgs = { inherit pkgs; };
             modules = [
-              (
-                { lib, ... }:
-                {
-                  options.assertions = lib.mkOption {
-                    type = lib.types.listOf lib.types.anything;
-                    default = [ ];
-                  };
-                  options.home.packages = lib.mkOption {
-                    type = lib.types.listOf lib.types.package;
-                    default = [ ];
-                  };
-                  options.xdg.configFile = lib.mkOption {
-                    type = lib.types.attrsOf lib.types.anything;
-                    default = { };
-                  };
-                  options.programs.waybar.enable = lib.mkOption {
-                    type = lib.types.bool;
-                    default = false;
-                  };
-                  options.programs.waybar.style = lib.mkOption {
-                    type = lib.types.lines;
-                    default = "";
-                  };
-                  options.programs.waybar.settings = lib.mkOption {
-                    type = lib.types.attrsOf (
-                      lib.types.submodule {
-                        freeformType = lib.types.attrsOf lib.types.anything;
-                        options."modules-left" = lib.mkOption {
-                          type = lib.types.listOf lib.types.str;
-                          default = [ ];
-                        };
-                        options."modules-center" = lib.mkOption {
-                          type = lib.types.listOf lib.types.str;
-                          default = [ ];
-                        };
-                        options."modules-right" = lib.mkOption {
-                          type = lib.types.listOf lib.types.str;
-                          default = [ ];
-                        };
-                      }
-                    );
-                    default = { };
-                  };
-                }
-              )
-              (import ./nix/home-manager.nix { inherit self; })
+              hmOptionStubs
+              hmModule
               {
                 programs.d2b-wlcontrol = {
                   enable = true;
@@ -151,10 +160,26 @@
               }
             ];
           };
+          hmWaybarDisabledEval = pkgs.lib.evalModules {
+            specialArgs = { inherit pkgs; };
+            modules = [
+              hmOptionStubs
+              hmModule
+              {
+                programs.d2b-wlcontrol = {
+                  enable = true;
+                  waybar.enable = false;
+                };
+              }
+            ];
+          };
+          disabledWaybarFilesAbsent =
+            !(hmWaybarDisabledEval.config.xdg.configFile ? "d2b-wlcontrol/waybar-module.json")
+            && !(hmWaybarDisabledEval.config.xdg.configFile ? "d2b-wlcontrol/style.css");
           renderedModule =
-            builtins.toJSON hmEval.config.programs.waybar.settings.mainBar."custom/d2b-wlcontrol";
-          renderedStyle =
-            pkgs.writeText "d2b-wlcontrol-waybar-style.css" hmEval.config.programs.waybar.style;
+            builtins.toJSON
+              hmEval.config.programs.waybar.settings.mainBar."custom/d2b-wlcontrol";
+          renderedStyle = pkgs.writeText "d2b-wlcontrol-waybar-style.css" hmEval.config.programs.waybar.style;
         in
         {
           package = self.packages.${system}.default;
@@ -174,6 +199,7 @@
             printf '%s' '${builtins.toJSON hmEval.config.programs.waybar.settings}' \
               | grep -q '"modules-left":\["clock","custom/d2b-wlcontrol"\]'
             grep -q '#custom-d2b-wlcontrol.unsafe-local' ${renderedStyle}
+            test '${if disabledWaybarFilesAbsent then "true" else "false"}' = true
             touch $out
           '';
         }

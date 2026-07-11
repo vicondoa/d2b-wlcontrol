@@ -46,6 +46,8 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
   before frame decoding instead of accepting a truncated packet, and retries
   interrupted or spuriously awakened packet reads and writes against one
   absolute deadline.
+- The Home Manager module now omits generated Waybar module and stylesheet
+  files when `programs.d2b-wlcontrol.waybar.enable` is false.
 
 ### Security
 
