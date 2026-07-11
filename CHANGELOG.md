@@ -43,7 +43,8 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
   popup palette remains independently configurable and Stylix-agnostic.
 - Updated package, workspace, flake, and toolkit integration versions to 0.2.0.
 - Public-socket receive handling rejects oversized `SOCK_SEQPACKET` packets
-  before frame decoding instead of accepting a truncated packet.
+  before frame decoding instead of accepting a truncated packet, and retries
+  interrupted packet reads and writes.
 
 ### Security
 
