@@ -50,7 +50,7 @@ root-owned d2b launcher/state files.
 ```nix
 {
   inputs.d2b-toolkit.url =
-    "github:vicondoa/d2b-toolkit/fde6af8b842718e7150f5056d4eba73093d4ad77";
+    "github:vicondoa/d2b-toolkit/v0.2.0";
   inputs.d2b-toolkit.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.d2b-wlcontrol.url = "github:vicondoa/d2b-wlcontrol";
@@ -111,12 +111,12 @@ nix flake check --no-build --all-systems
 
 ## Documentation
 
-- [Configuration](docs/configuration.md)
-- [Controls](docs/controls.md)
-- [Waybar](docs/waybar.md)
-- [niri / Wayland](docs/niri.md)
-- [Security](docs/security.md)
-- [Troubleshooting](docs/troubleshooting.md)
+- [Configuration](docs/reference/configuration.md)
+- [Controls](docs/reference/controls.md)
+- [Waybar](docs/how-to/configure-waybar.md)
+- [niri / Wayland](docs/how-to/configure-niri.md)
+- [Security](docs/explanation/security.md)
+- [Troubleshooting](docs/how-to/troubleshooting.md)
 - [Contributor manual](AGENTS.md)
 
 ## License

@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit/fde6af8b842718e7150f5056d4eba73093d4ad77";
+      url = "github:vicondoa/d2b-toolkit/v0.2.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

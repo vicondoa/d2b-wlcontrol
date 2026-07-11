@@ -289,13 +289,18 @@ to.
 ## References
 
 - [README.md](./README.md) — user-facing intro + install.
-- [docs/configuration.md](./docs/configuration.md) — config surface.
-- [docs/controls.md](./docs/controls.md) — action matrix + auth gating.
-- [docs/waybar.md](./docs/waybar.md) — Waybar module JSON + CSS.
-- [docs/niri.md](./docs/niri.md) — niri / layer-shell Wayland notes.
-- [docs/security.md](./docs/security.md) — trust boundary + command safety.
-- [docs/troubleshooting.md](./docs/troubleshooting.md) — public workload,
-  helper, shell, Wayland, and Waybar remediation.
+- [docs/reference/configuration.md](./docs/reference/configuration.md) — config
+  surface.
+- [docs/reference/controls.md](./docs/reference/controls.md) — action matrix +
+  auth gating.
+- [docs/how-to/configure-waybar.md](./docs/how-to/configure-waybar.md) — Waybar
+  module JSON + CSS.
+- [docs/how-to/configure-niri.md](./docs/how-to/configure-niri.md) — niri /
+  layer-shell Wayland notes.
+- [docs/explanation/security.md](./docs/explanation/security.md) — trust
+  boundary + command safety.
+- [docs/how-to/troubleshooting.md](./docs/how-to/troubleshooting.md) — public
+  workload, helper, shell, Wayland, and Waybar remediation.
 - [d2b `docs/reference/daemon-api.md`](https://github.com/vicondoa/d2b/blob/main/docs/reference/daemon-api.md)
   — the public-socket wire contract this client speaks.
 - [d2b `docs/reference/cli-contract.md`](https://github.com/vicondoa/d2b/blob/main/docs/reference/cli-contract.md)

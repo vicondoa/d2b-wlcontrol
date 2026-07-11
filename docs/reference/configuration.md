@@ -140,7 +140,8 @@ Manager module.
 ## Input alignment
 
 The flake pins d2b-toolkit release `v0.2.0` at
-`fde6af8b842718e7150f5056d4eba73093d4ad77`. Consumers composing desktop
+`v0.2.0` (resolved by `flake.lock` to
+`fde6af8b842718e7150f5056d4eba73093d4ad77`). Consumers composing desktop
 companions should keep one toolkit revision:
 
 ```nix
