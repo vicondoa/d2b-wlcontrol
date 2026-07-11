@@ -45,7 +45,8 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
 - Public-socket receive handling rejects oversized `SOCK_SEQPACKET` packets
   before frame decoding instead of accepting a truncated packet, and retries
   interrupted or spuriously awakened packet reads and writes against one
-  absolute deadline.
+  absolute deadline. Interrupted and backlog-saturated non-blocking connects
+  enter the same bounded completion path.
 - The Home Manager module now omits generated Waybar module and stylesheet
   files when `programs.d2b-wlcontrol.waybar.enable` is false.
 

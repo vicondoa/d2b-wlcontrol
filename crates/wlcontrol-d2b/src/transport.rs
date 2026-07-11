@@ -48,7 +48,7 @@ impl SeqpacketTransport {
 
         match connect(fd.as_raw_fd(), &addr) {
             Ok(()) => Ok(Self { fd, timeout }),
-            Err(Errno::EINPROGRESS) | Err(Errno::EALREADY) => {
+            Err(Errno::EINPROGRESS | Errno::EALREADY | Errno::EAGAIN | Errno::EINTR) => {
                 wait_for(&fd, PollFlags::POLLOUT, timeout, "connect").map_err(|err| {
                     if let WlError::Timeout(message) = err {
                         WlError::DaemonDown(message)
