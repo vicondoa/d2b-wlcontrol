@@ -2001,6 +2001,8 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("property real panelTopMargin: 24"));
         assert!(QML_SOURCE.contains("property real panelRightMargin: 24"));
         assert!(QML_SOURCE.contains("spacing: 8"));
+        assert!(QML_SOURCE.contains("model: vm.quickLaunch || []"));
+        assert!(QML_SOURCE.contains("[\"quick-launch\", vm.name, modelData.id]"));
         assert!(QML_SOURCE.contains("function hasCapability(vm, capability)"));
         assert!(QML_SOURCE.contains("root.hasCapability(vm, \"storeVerify\")"));
         assert!(QML_SOURCE.contains("root.canAdvanced(vm, \"switch\")"));
