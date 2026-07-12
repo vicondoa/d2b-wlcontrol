@@ -2032,7 +2032,7 @@ mod qml_tests {
             .contains("[\"workload-launch\", workload.canonicalTarget, item.id, item.type]"));
         assert!(QML_SOURCE.contains("function realmAllUnsafe(group)"));
         assert!(QML_SOURCE.contains("function realmMixedIsolation(group)"));
-        assert!(QML_SOURCE.contains("visible: !root.realmAllUnsafe(realmCard.group)"));
+        assert!(QML_SOURCE.contains("function standaloneWorkloads(group)"));
         assert!(QML_SOURCE.contains("unsafe-local · no isolation · user-manager lifetime"));
         assert!(QML_SOURCE.contains("Helper unavailable — enable and start"));
         assert!(QML_SOURCE.contains("User manager unavailable — sign in"));
