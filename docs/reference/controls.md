@@ -29,6 +29,12 @@ only the dispatch boundary:
 - `exec` uses d2b configured launch;
 - `shell` uses wlterm/persistent-shell with the canonical workload target.
 
+VM-backed items appear as icon actions on the existing compact VM row alongside
+its lifecycle controls; wlcontrol does not add a second workload card for the
+same VM. Non-VM workloads, including unsafe-local host tools, use the same
+compact row hierarchy without VM-only controls. Tooltips retain each item-owned
+display name.
+
 ## Unsafe-local control policy
 
 Unsafe-local is intentionally not a VM. Its rows show:

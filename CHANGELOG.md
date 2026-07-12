@@ -6,6 +6,15 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Removed duplicate workload launcher cards from realm panels. VM-backed
+  launcher items now appear as icon actions on the existing compact VM row,
+  while unsafe-local and other non-VM workloads use the same compact row
+  hierarchy.
+- Mapped common XDG browser icon names to Material Symbols and fall back to the
+  generic apps glyph instead of rendering missing icon names as text.
+
 ## [0.2.0] - 2026-07-11
 
 ### Added
