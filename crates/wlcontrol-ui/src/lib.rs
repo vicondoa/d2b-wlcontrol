@@ -2098,9 +2098,7 @@ mod qml_tests {
         ] {
             assert!(!workload_rows.contains(forbidden), "{forbidden}");
         }
-        let realm_vm_start = QML_SOURCE
-            .find("id: realmVmCard")
-            .expect("realm VM card");
+        let realm_vm_start = QML_SOURCE.find("id: realmVmCard").expect("realm VM card");
         let realm_vm_end = QML_SOURCE[realm_vm_start..]
             .find("model: root.ungroupedVms()")
             .map(|offset| realm_vm_start + offset)
