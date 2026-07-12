@@ -2038,7 +2038,6 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("User manager unavailable — sign in"));
         assert!(!QML_SOURCE.contains("realm-workload-launch"));
         assert!(!QML_SOURCE.contains("realmChooser"));
-        assert!(!QML_SOURCE.contains("model: vm.quickLaunch || []"));
         assert!(QML_SOURCE.contains("border.color: root.shellColor(\"border\", \"#2a2d35\")"));
         assert!(QML_SOURCE.contains("function shellColor(name, fallback)"));
         assert!(QML_SOURCE.contains("root.shellColor(\"surface\", \"#16181d\")"));
@@ -2099,6 +2098,19 @@ mod qml_tests {
         ] {
             assert!(!workload_rows.contains(forbidden), "{forbidden}");
         }
+        let realm_vm_start = QML_SOURCE
+            .find("id: realmVmCard")
+            .expect("realm VM card");
+        let realm_vm_end = QML_SOURCE[realm_vm_start..]
+            .find("model: root.ungroupedVms()")
+            .map(|offset| realm_vm_start + offset)
+            .expect("ungrouped VM cards after realm VM cards");
+        let realm_vm_rows = &QML_SOURCE[realm_vm_start..realm_vm_end];
+        assert!(realm_vm_rows.contains(
+            "model: realmVmCard.workload ? (realmVmCard.workload.launcherItems || []) : []"
+        ));
+        assert!(!realm_vm_rows.contains("model: vm.quickLaunch || []"));
+        assert!(!realm_vm_rows.contains("[\"terminal\", vm.name]"));
         assert!(!QML_SOURCE.contains("import QtQuick.Controls"));
     }
 }
