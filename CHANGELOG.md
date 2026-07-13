@@ -6,8 +6,24 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Added transient popup focus behavior with a process-local, accessible pin,
+  compositor-work-area dragging, explicit close/Escape controls, and top-right
+  placement reset on every opening.
+- Added `render-sample --output <PNG>` for a bounded deterministic render of
+  dense mocked state through the production Quickshell tree without live I/O or
+  actions, normalized to 420×640 physical pixels across output scales.
+
+### Changed
+
+- Realm identity rails now use one rounded d2b-accent outer contour with a
+  neutral inset, preserving the neutral shell palette.
+
 ### Fixed
 
+- Reserved an inset, clipped scrollbar gutter so realm and VM content no longer
+  extends under the track or into the rounded panel silhouette.
 - Removed duplicate workload launcher cards from realm panels. VM-backed
   launcher items now appear as icon actions on the existing compact VM row,
   while unsafe-local and other non-VM workloads use the same compact row
