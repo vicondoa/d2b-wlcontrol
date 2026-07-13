@@ -288,6 +288,17 @@ ShellRoot {
     return root.visibleVms().filter(vm => workloads.some(workload => !root.isUnsafeLocal(workload) && root.vmMatchesRealmWorkload(vm, workload)))
   }
 
+  function workloadForVm(group, vm) {
+    const workloads = group.workloads || []
+    return workloads.find(workload => !root.isUnsafeLocal(workload) && root.vmMatchesRealmWorkload(vm, workload)) || null
+  }
+
+  function standaloneWorkloads(group) {
+    const vms = root.visibleVms()
+    return (group.workloads || []).filter(workload =>
+      !vms.some(vm => root.vmMatchesRealmWorkload(vm, workload)))
+  }
+
   function ungroupedVms() {
     const groups = root.realmGroups()
     return root.visibleVms().filter(vm =>
@@ -332,7 +343,28 @@ ShellRoot {
 
   function launcherItemIcon(item) {
     if (!item || !item.icon) return "apps"
-    return item.icon.name || item.icon.id || "apps"
+    const icon = (item.icon.name || item.icon.id || "apps").toLowerCase()
+    if (icon === "firefox" || icon === "web-browser" || icon === "browser") return "language"
+    if (icon === "utilities-terminal") return "terminal"
+    const materialSymbols = [
+      "apps", "terminal", "language", "desktop_windows", "monitoring",
+      "public", "travel_explore", "code", "settings", "security",
+      "storage", "cloud", "web", "open_in_new"
+    ]
+    return materialSymbols.indexOf(icon) >= 0 ? icon : "apps"
+  }
+
+  function workloadDotColor(workload) {
+    if (!workload || workload.availability !== "ready") return root.stateColor("error")
+    if (workload.workloadState === "starting" || workload.workloadState === "stopping") return root.stateColor("transitioning")
+    return root.stateColor("running")
+  }
+
+  function workloadMeta(workload) {
+    const parts = [workload.canonicalTarget]
+    if (workload.providerKind) parts.push(workload.providerKind)
+    if (workload.workloadState && workload.workloadState !== "unknown") parts.push(workload.workloadState)
+    return parts.filter(part => part && part.length > 0).join(" · ")
   }
 
   function canLaunchWorkload(workload, item) {
@@ -1087,7 +1119,7 @@ ShellRoot {
                         width: parent.width
                         spacing: 6
                         Repeater {
-                          model: realmCard.group.workloads || []
+                          model: root.standaloneWorkloads(realmCard.group)
                           Rectangle {
                             id: workloadRow
                             width: parent.width
@@ -1106,35 +1138,58 @@ ShellRoot {
                               anchors.margins: 7
                               spacing: 5
 
-                              Row {
+                              Item {
                                 width: parent.width
-                                spacing: 8
-                                Text {
-                                  width: parent.width - (providerText.visible ? providerText.implicitWidth + 10 : 0)
-                                  color: root.shellColor("foreground_strong", "#ffffff")
-                                  font.pixelSize: 13
-                                  font.bold: true
-                                  elide: Text.ElideRight
-                                  text: workloadRow.workload.label || workloadRow.workload.workloadName
+                                height: 30
+                                Row {
+                                  anchors.fill: parent
+                                  spacing: 8
+                                  Text {
+                                    width: 20
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: root.workloadDotColor(workloadRow.workload)
+                                    font.pixelSize: 15
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: "●"
+                                  }
+                                  Column {
+                                    width: parent.width - workloadActions.implicitWidth - 34
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: 1
+                                    Text {
+                                      width: parent.width
+                                      color: root.shellColor("foreground_strong", "#ffffff")
+                                      font.pixelSize: 13
+                                      font.bold: true
+                                      elide: Text.ElideRight
+                                      text: workloadRow.workload.workloadName
+                                    }
+                                    Text {
+                                      width: parent.width
+                                      color: root.shellColor("muted", "#9399b2")
+                                      font.pixelSize: 10
+                                      elide: Text.ElideRight
+                                      text: root.workloadMeta(workloadRow.workload)
+                                    }
+                                  }
+                                  Row {
+                                    id: workloadActions
+                                    spacing: 5
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    Repeater {
+                                      model: workloadRow.workload.launcherItems || []
+                                      IconButton {
+                                        text: root.launcherItemIcon(modelData)
+                                        tooltip: enabled
+                                          ? ("Launch " + modelData.name + " for " + workloadRow.workload.canonicalTarget)
+                                          : root.launcherDisabledReason(workloadRow.workload)
+                                        accent: realmCard.group.realmColor || root.hostAccentColor()
+                                        enabled: root.canLaunchWorkload(workloadRow.workload, modelData)
+                                        onClicked: root.launchWorkloadItem(workloadRow.workload, modelData)
+                                      }
+                                    }
+                                  }
                                 }
-                                Text {
-                                  id: providerText
-                                  visible: !root.realmAllUnsafe(realmCard.group)
-                                  color: root.isUnsafeLocal(workloadRow.workload)
-                                    ? (realmCard.group.realmColor || root.stateColor("error"))
-                                    : root.shellColor("muted", "#9399b2")
-                                  font.pixelSize: 10
-                                  font.bold: root.isUnsafeLocal(workloadRow.workload)
-                                  text: root.providerLabel(workloadRow.workload)
-                                }
-                              }
-
-                              Text {
-                                width: parent.width
-                                color: root.shellColor("muted", "#9399b2")
-                                font.pixelSize: 10
-                                elide: Text.ElideRight
-                                text: workloadRow.workload.canonicalTarget
                               }
 
                               Text {
@@ -1157,26 +1212,6 @@ ShellRoot {
                                 wrapMode: Text.WordWrap
                                 text: root.availabilityMessage(workloadRow.workload)
                               }
-
-                              Flow {
-                                width: parent.width
-                                spacing: 6
-                                Repeater {
-                                  model: workloadRow.workload.launcherItems || []
-                                  ControlChip {
-                                    icon: root.launcherItemIcon(modelData)
-                                    label: modelData.name
-                                    tooltip: enabled
-                                      ? ("Launch " + modelData.name + " for " + workloadRow.workload.canonicalTarget)
-                                      : root.launcherDisabledReason(workloadRow.workload)
-                                    accent: root.isUnsafeLocal(workloadRow.workload)
-                                      ? (realmCard.group.realmColor || root.hostAccentColor())
-                                      : root.shellColor("foreground_strong", "#ffffff")
-                                    enabled: root.canLaunchWorkload(workloadRow.workload, modelData)
-                                    onClicked: root.launchWorkloadItem(workloadRow.workload, modelData)
-                                  }
-                                }
-                              }
                             }
                           }
                         }
@@ -1192,6 +1227,7 @@ ShellRoot {
                           border.color: root.shellColor("border", "#2a2d35")
                           border.width: 1
                           property var vm: modelData
+                          property var workload: root.workloadForVm(realmCard.group, vm)
                           property bool expanded: false
                           property bool usbEntryVisible: false
                           property string usbEntryText: ""
@@ -1247,21 +1283,16 @@ ShellRoot {
                                   id: compactActions
                                   spacing: 5
                                   anchors.verticalCenter: parent.verticalCenter
-                                  IconButton {
-                                    text: "terminal"
-                                    tooltip: enabled ? ("Open a terminal in " + vm.name) : root.disabledReason(vm, "admin", "terminal")
-                                    accent: root.shellColor("foreground_strong", "#ffffff")
-                                    enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"
-                                    onClicked: root.action(["terminal", vm.name])
-                                  }
                                   Repeater {
-                                    model: vm.quickLaunch || []
+                                    model: realmVmCard.workload ? (realmVmCard.workload.launcherItems || []) : []
                                     IconButton {
-                                      text: modelData.icon
-                                      tooltip: enabled ? modelData.tooltip : root.disabledReason(vm, "admin", "terminal")
+                                      text: root.launcherItemIcon(modelData)
+                                      tooltip: enabled
+                                        ? ("Launch " + modelData.name + " for " + realmVmCard.workload.canonicalTarget)
+                                        : root.launcherDisabledReason(realmVmCard.workload)
                                       accent: root.shellColor("foreground_strong", "#ffffff")
-                                      enabled: root.canAdvanced(vm, "terminal") && root.state.role === "admin"
-                                      onClicked: root.action(["quick-launch", vm.name, modelData.id])
+                                      enabled: root.canLaunchWorkload(realmVmCard.workload, modelData)
+                                      onClicked: root.launchWorkloadItem(realmVmCard.workload, modelData)
                                     }
                                   }
                                   IconButton {
@@ -1986,16 +2017,24 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("\" workload\""));
         assert!(QML_SOURCE.contains("model: root.vmsForRealm(realmCard.group)"));
         assert!(QML_SOURCE.contains("model: root.ungroupedVms()"));
-        assert!(QML_SOURCE.contains("model: realmCard.group.workloads || []"));
+        assert!(QML_SOURCE.contains("model: root.standaloneWorkloads(realmCard.group)"));
         assert!(QML_SOURCE.contains("model: workloadRow.workload.launcherItems || []"));
-        assert!(QML_SOURCE.contains("label: modelData.name"));
-        assert!(QML_SOURCE.contains("icon: root.launcherItemIcon(modelData)"));
+        assert!(
+            QML_SOURCE.contains("property var workload: root.workloadForVm(realmCard.group, vm)")
+        );
+        assert!(QML_SOURCE.contains(
+            "model: realmVmCard.workload ? (realmVmCard.workload.launcherItems || []) : []"
+        ));
+        assert!(QML_SOURCE.contains("text: root.launcherItemIcon(modelData)"));
+        assert!(QML_SOURCE.contains(
+            "if (icon === \"firefox\" || icon === \"web-browser\" || icon === \"browser\") return \"language\""
+        ));
         assert!(QML_SOURCE.contains("function launchWorkloadItem(workload, item)"));
         assert!(QML_SOURCE
             .contains("[\"workload-launch\", workload.canonicalTarget, item.id, item.type]"));
         assert!(QML_SOURCE.contains("function realmAllUnsafe(group)"));
         assert!(QML_SOURCE.contains("function realmMixedIsolation(group)"));
-        assert!(QML_SOURCE.contains("visible: !root.realmAllUnsafe(realmCard.group)"));
+        assert!(QML_SOURCE.contains("function standaloneWorkloads(group)"));
         assert!(QML_SOURCE.contains("unsafe-local · no isolation · user-manager lifetime"));
         assert!(QML_SOURCE.contains("Helper unavailable — enable and start"));
         assert!(QML_SOURCE.contains("User manager unavailable — sign in"));
@@ -2061,6 +2100,17 @@ mod qml_tests {
         ] {
             assert!(!workload_rows.contains(forbidden), "{forbidden}");
         }
+        let realm_vm_start = QML_SOURCE.find("id: realmVmCard").expect("realm VM card");
+        let realm_vm_end = QML_SOURCE[realm_vm_start..]
+            .find("model: root.ungroupedVms()")
+            .map(|offset| realm_vm_start + offset)
+            .expect("ungrouped VM cards after realm VM cards");
+        let realm_vm_rows = &QML_SOURCE[realm_vm_start..realm_vm_end];
+        assert!(realm_vm_rows.contains(
+            "model: realmVmCard.workload ? (realmVmCard.workload.launcherItems || []) : []"
+        ));
+        assert!(!realm_vm_rows.contains("model: vm.quickLaunch || []"));
+        assert!(!realm_vm_rows.contains("[\"terminal\", vm.name]"));
         assert!(!QML_SOURCE.contains("import QtQuick.Controls"));
     }
 }
