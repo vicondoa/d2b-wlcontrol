@@ -915,9 +915,9 @@ ShellRoot {
   property string actionMessage: ""
   property bool actionFailed: false
   property bool actionBusy: false
-  property real panelX: 0
-  property real panelY: 0
-  property bool placementInitialized: false
+  property real panelTopMargin: 24
+  property real panelRightMargin: 24
+  property real panelEdgeGap: 4
   property bool pinned: false
   property bool hadFocus: false
   property string confirmKey: ""
@@ -1426,29 +1426,22 @@ ShellRoot {
   }
 
   function movePanel(dx, dy) {
-    panelX = clamp(panelX + dx, 4, Math.max(4, screenWidth() - panelCard.width - 4))
-    panelY = clamp(panelY + dy, 4, Math.max(4, screenHeight() - panelCard.height - 4))
+    panelRightMargin = clamp(panelRightMargin - dx, panelEdgeGap, Math.max(panelEdgeGap, screenWidth() - panelCard.width - panelEdgeGap))
+    panelTopMargin = clamp(panelTopMargin + dy, panelEdgeGap, Math.max(panelEdgeGap, screenHeight() - panelCard.height - panelEdgeGap))
   }
 
   function panelContentHeight() {
     const resultHeight = actionMessage.length > 0 && !busy ? Math.max(26, actionResult.implicitHeight + 10) + 12 : 0
-    return 32 + 12 + 1 + 12 + 26 + 12 + resultHeight + list.height + 32
+    return 32 + 12 + 1 + 12 + 26 + 12 + resultHeight + list.implicitHeight + 32
   }
 
-  function resetPanelPlacement() {
-    if (panel.width <= 0 || panel.height <= 0 || panelCard.width <= 0 || panelCard.height <= 0) return
-    panelX = clamp(panel.width - panelCard.width - 24, 4, Math.max(4, panel.width - panelCard.width - 4))
-    panelY = clamp(24, 4, Math.max(4, panel.height - panelCard.height - 4))
-    placementInitialized = true
+  function maxPanelHeight() {
+    return Math.max(240, Math.floor(panel.height * 0.8))
   }
 
   function reclampPanelPlacement() {
-    if (!placementInitialized) {
-      resetPanelPlacement()
-      return
-    }
-    panelX = clamp(panelX, 4, Math.max(4, screenWidth() - panelCard.width - 4))
-    panelY = clamp(panelY, 4, Math.max(4, screenHeight() - panelCard.height - 4))
+    panelRightMargin = clamp(panelRightMargin, panelEdgeGap, Math.max(panelEdgeGap, screenWidth() - panelCard.width - panelEdgeGap))
+    panelTopMargin = clamp(panelTopMargin, panelEdgeGap, Math.max(panelEdgeGap, screenHeight() - panelCard.height - panelEdgeGap))
   }
 
   function handleFocusChanged(focused) {
@@ -1584,7 +1577,6 @@ ShellRoot {
 
   Component.onCompleted: {
     root.pinned = false
-    Qt.callLater(root.resetPanelPlacement)
     if (root.renderMode) {
       root.pinned = true
       renderCaptureTimer.start()
@@ -1638,12 +1630,12 @@ ShellRoot {
 
     Rectangle {
       id: panelCard
-      x: root.panelX
-      y: root.panelY
+      x: panel.width - width - root.panelRightMargin
+      y: root.panelTopMargin
       width: Math.min(420, Math.max(1, panel.width - 8))
       height: root.renderMode
         ? Math.min(640, Math.max(1, panel.height - 8))
-        : Math.min(Math.max(240, root.panelContentHeight()), Math.max(1, Math.floor(panel.height * 0.5)))
+        : Math.min(Math.max(240, root.panelContentHeight()), root.maxPanelHeight())
       radius: 18
       color: root.shellColor("background", "#0f1117")
       border.color: root.shellColor("border", "#2a2d35")
@@ -1664,32 +1656,12 @@ ShellRoot {
         onImplicitHeightChanged: root.reclampPanelPlacement()
 
           Item {
+            id: controlHeader
             width: parent.width
             height: 32
 
-            MouseArea {
-              id: dragHandle
-              anchors.fill: parent
-              acceptedButtons: Qt.LeftButton
-              property real lastPanelX: 0
-              property real lastPanelY: 0
-              onPressed: (mouse) => {
-                const point = dragHandle.mapToItem(panel, mouse.x, mouse.y)
-                lastPanelX = point.x
-                lastPanelY = point.y
-              }
-              onPositionChanged: (mouse) => {
-                if (!pressed) return
-                const point = dragHandle.mapToItem(panel, mouse.x, mouse.y)
-                const dx = point.x - lastPanelX
-                const dy = point.y - lastPanelY
-                root.movePanel(dx, dy)
-                lastPanelX = point.x
-                lastPanelY = point.y
-              }
-            }
-
             Rectangle {
+              id: roleBadge
               width: 66
               height: 22
               radius: 999
@@ -1697,6 +1669,7 @@ ShellRoot {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               Text {
+                id: panelTitle
                 anchors.centerIn: parent
                 color: root.state.connectivity === "connected" ? root.stateColor("running") : root.stateColor(root.state.connectivity === "auth-denied" ? "denied" : "error")
                 font.pixelSize: 11
@@ -1716,7 +1689,34 @@ ShellRoot {
               text: "d2b"
             }
 
+            MouseArea {
+              id: dragHandle
+              anchors.left: roleBadge.right
+              anchors.leftMargin: 8
+              anchors.right: headerControls.left
+              anchors.rightMargin: 8
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              acceptedButtons: Qt.LeftButton
+              cursorShape: Qt.SizeAllCursor
+              property real lastPanelX: 0
+              property real lastPanelY: 0
+              onPressed: (mouse) => {
+                const point = dragHandle.mapToItem(panel, mouse.x, mouse.y)
+                lastPanelX = point.x
+                lastPanelY = point.y
+              }
+              onPositionChanged: (mouse) => {
+                if (!pressed) return
+                const point = dragHandle.mapToItem(panel, mouse.x, mouse.y)
+                root.movePanel(point.x - lastPanelX, point.y - lastPanelY)
+                lastPanelX = point.x
+                lastPanelY = point.y
+              }
+            }
+
             Row {
+              id: headerControls
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               spacing: 8
@@ -2803,8 +2803,8 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("PanelWindow"));
         assert!(QML_SOURCE.contains("id: vmListFlickable"));
         assert!(QML_SOURCE.contains("id: scrollbarGutter"));
-        assert!(QML_SOURCE.contains("property real panelX: 0"));
-        assert!(QML_SOURCE.contains("property real panelY: 0"));
+        assert!(QML_SOURCE.contains("property real panelTopMargin: 24"));
+        assert!(QML_SOURCE.contains("property real panelRightMargin: 24"));
         assert!(QML_SOURCE.contains("spacing: 8"));
         assert!(QML_SOURCE.contains("model: vm.quickLaunch || []"));
         assert!(QML_SOURCE.contains("[\"quick-launch\", vm.name, modelData.id]"));
@@ -2941,11 +2941,33 @@ mod qml_tests {
         assert!(QML_SOURCE.contains("anchors { top: true; right: true; bottom: true; left: true }"));
         assert!(QML_SOURCE.contains("exclusiveZone: 0"));
         assert!(QML_SOURCE.contains("mask: Region { item: panelCard }"));
-        assert!(QML_SOURCE.contains("panel.width - panelCard.width - 24"));
+        assert!(QML_SOURCE.contains("property real panelTopMargin: 24"));
+        assert!(QML_SOURCE.contains("property real panelRightMargin: 24"));
+        assert!(QML_SOURCE.contains("x: panel.width - width - root.panelRightMargin"));
+        assert!(QML_SOURCE.contains("panelRightMargin = clamp(panelRightMargin - dx"));
+        assert!(QML_SOURCE.contains("panelTopMargin = clamp(panelTopMargin + dy"));
         assert!(QML_SOURCE.contains("onDevicePixelRatioChanged: root.reclampPanelPlacement()"));
+        assert!(QML_SOURCE.contains("list.implicitHeight"));
+        assert!(QML_SOURCE.contains("Math.floor(panel.height * 0.8)"));
+        assert!(QML_SOURCE
+            .contains("Math.min(Math.max(240, root.panelContentHeight()), root.maxPanelHeight())"));
         assert!(!QML_SOURCE.contains("NIRI_SOCKET"));
-        assert!(!QML_SOURCE.contains("panelTopMargin"));
-        assert!(!QML_SOURCE.contains("panelRightMargin"));
+        assert!(!QML_SOURCE.contains("property real panelX"));
+        assert!(!QML_SOURCE.contains("property real panelY"));
+    }
+
+    #[test]
+    fn qml_exposes_a_control_safe_header_drag_target() {
+        assert!(QML_SOURCE.contains("id: roleBadge"));
+        assert!(QML_SOURCE.contains("id: headerControls"));
+        assert!(QML_SOURCE.contains("id: dragHandle"));
+        assert!(QML_SOURCE.contains("anchors.left: roleBadge.right"));
+        assert!(QML_SOURCE.contains("anchors.right: headerControls.left"));
+        assert!(QML_SOURCE.contains("cursorShape: Qt.SizeAllCursor"));
+        assert!(QML_SOURCE.contains("dragHandle.mapToItem(panel, mouse.x, mouse.y)"));
+        assert!(QML_SOURCE.contains("root.movePanel(point.x - lastPanelX, point.y - lastPanelY)"));
+        assert!(QML_SOURCE.contains("lastPanelX = point.x"));
+        assert!(QML_SOURCE.contains("lastPanelY = point.y"));
     }
 
     #[test]
