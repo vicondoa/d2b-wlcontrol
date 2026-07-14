@@ -95,6 +95,8 @@ d2b-wlcontrol print-css
 Install the package on `PATH`, add `custom/d2b-wlcontrol` to a Waybar module
 list, and do not configure `interval`. Left-click toggles the native
 Quickshell layer-shell popup; no niri window rule or XWayland is required.
+The popup starts unpinned, closes on focus loss after activation, and can be
+pinned or dragged within the compositor-provided usable output area.
 
 ## Development
 
@@ -107,6 +109,13 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 nix flake check --no-build --all-systems
+```
+
+With a live niri/Wayland session, generate the deterministic production-tree
+UI review sample as a 420×640 physical-pixel PNG with:
+
+```bash
+d2b-wlcontrol render-sample --output "$PWD/wlcontrol-panel.png"
 ```
 
 ## Documentation

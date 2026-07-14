@@ -61,6 +61,12 @@ enum Command {
     Waybar,
     /// Open (or focus) the Quickshell control center.
     Open,
+    /// Render deterministic mocked panel data to a 420x640 physical-pixel PNG.
+    RenderSample {
+        /// PNG output path. Its parent directory must already exist.
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Print the normalized control-surface state as JSON.
     StatusJson,
     /// Print detected host USB devices as JSON for the control popup.
@@ -208,20 +214,30 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> wlcontrol_core::WlResult<ExitCode> {
-    let config = Config::load()?;
     match cli.command {
-        Command::Waybar => run_waybar(&config),
-        Command::Open => run_open(&config),
-        Command::StatusJson => run_status_json(&config),
-        Command::UsbDevicesJson => run_usb_devices_json(),
-        Command::Action { action } => run_action(&config, action.into_kind()),
-        Command::PrintWaybarConfig => {
-            print!("{}", waybar_config_output());
+        Command::RenderSample { output } => {
+            wlcontrol_ui::render_sample(&output)?;
+            println!("{}", output.display());
             Ok(ExitCode::SUCCESS)
         }
-        Command::PrintCss => {
-            print!("{STYLE_SNIPPET}");
-            Ok(ExitCode::SUCCESS)
+        command => {
+            let config = Config::load()?;
+            match command {
+                Command::Waybar => run_waybar(&config),
+                Command::Open => run_open(&config),
+                Command::StatusJson => run_status_json(&config),
+                Command::UsbDevicesJson => run_usb_devices_json(),
+                Command::Action { action } => run_action(&config, action.into_kind()),
+                Command::PrintWaybarConfig => {
+                    print!("{}", waybar_config_output());
+                    Ok(ExitCode::SUCCESS)
+                }
+                Command::PrintCss => {
+                    print!("{STYLE_SNIPPET}");
+                    Ok(ExitCode::SUCCESS)
+                }
+                Command::RenderSample { .. } => unreachable!("handled before config loading"),
+            }
         }
     }
 }
@@ -841,6 +857,23 @@ mod tests {
                 item_kind: LauncherItemKind::Exec,
             }
         );
+    }
+
+    #[test]
+    fn render_sample_requires_an_explicit_output_path() {
+        let cli = Cli::try_parse_from([
+            "d2b-wlcontrol",
+            "render-sample",
+            "--output",
+            "artifacts/wlcontrol.png",
+        ])
+        .expect("parse render sample");
+        assert!(matches!(
+            cli.command,
+            Command::RenderSample { output }
+                if output == Path::new("artifacts/wlcontrol.png")
+        ));
+        assert!(Cli::try_parse_from(["d2b-wlcontrol", "render-sample"]).is_err());
     }
 
     #[test]

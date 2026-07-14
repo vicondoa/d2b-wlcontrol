@@ -8,10 +8,12 @@
 
 use std::{
     env, fs,
-    io::Write as _,
+    io::{Cursor, Write as _},
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use wlcontrol_core::{Config, WlError, WlResult};
@@ -22,6 +24,232 @@ mod view_model;
 const QML_FILE: &str = "shell.qml";
 const PID_FILE: &str = "quickshell.pid";
 const SIGTERM: i32 = 15;
+const RENDER_TIMEOUT: Duration = Duration::from_secs(12);
+const RENDER_WIDTH: u32 = 420;
+const RENDER_HEIGHT: u32 = 640;
+const MAX_RENDER_BYTES: u64 = 5 * 1024 * 1024;
+const MIN_RENDER_PAYLOAD_BYTES: usize = 4 * 1024;
+const INVALID_QML_ANCHOR_WARNING: &str = "Cannot anchor to an item that isn't a parent or sibling";
+
+const RENDER_THEME_JSON: &str = r##"{
+  "shell": {
+    "background": "#0f1117",
+    "surface": "#181b23",
+    "input_background": "#0a0c11",
+    "border": "#343946",
+    "foreground": "#dce2f2",
+    "foreground_strong": "#ffffff",
+    "foreground_disabled": "#80889b",
+    "inverse_foreground": "#050608",
+    "muted": "#98a2ba",
+    "success_surface": "#172a20",
+    "error_surface": "#301b22",
+    "warning_surface": "#31291a",
+    "slider_track": "#292e3a"
+  },
+  "states": {
+    "running": "#7bd88f",
+    "transitioning": "#f2c66d",
+    "pendingRestart": "#f0a95b",
+    "unknown": "#8791a8",
+    "error": "#f17886",
+    "denied": "#f17886"
+  },
+  "host": { "accent": "#7aa2f7" },
+  "vms": {
+    "design-vm": { "border": { "active": "#b8a1ff" } },
+    "build-vm": { "border": { "active": "#67d7c4" } },
+    "archive-vm": { "border": { "active": "#ef9f76" } }
+  }
+}"##;
+
+const RENDER_STATE_JSON: &str = r##"{
+  "connectivity": "connected",
+  "role": "admin",
+  "stale": false,
+  "note": "deterministic review sample",
+  "vms": [
+    {
+      "name": "design-vm",
+      "canonicalTarget": "design.studio.d2b",
+      "env": "studio",
+      "state": "running",
+      "isNetVm": false,
+      "hidden": false,
+      "pendingRestart": true,
+      "features": { "graphics": true, "tpm": true, "usbip": true, "audio": true },
+      "capabilities": { "start": true, "stop": true, "forceStop": true, "restart": true, "switch": true, "build": true, "boot": true, "usbHotplug": true, "storeVerify": true, "terminal": true },
+      "staticIp": "10.42.8.21",
+      "readiness": ["api-ready", "graphics-ready"],
+      "usb": [{ "vm": "design-vm", "env": "studio", "busId": "1-2", "bound": true, "ownerVm": "design-vm" }],
+      "audio": {
+        "speaker": { "level": 72, "muted": false },
+        "microphone": { "level": 48, "muted": false },
+        "providerKind": "local-hypervisor",
+        "enforcement": "host-and-guest"
+      },
+      "quickLaunch": []
+    },
+    {
+      "name": "build-vm",
+      "canonicalTarget": "builder.engineering.d2b",
+      "env": "engineering",
+      "state": "starting",
+      "isNetVm": false,
+      "hidden": false,
+      "pendingRestart": false,
+      "features": { "graphics": false, "tpm": true, "usbip": false, "audio": false },
+      "capabilities": { "start": true, "stop": true, "forceStop": false, "restart": true, "switch": true, "build": true, "boot": true, "usbHotplug": false, "storeVerify": true, "terminal": true },
+      "readiness": ["booting"],
+      "usb": [],
+      "quickLaunch": []
+    },
+    {
+      "name": "archive-vm",
+      "canonicalTarget": "archive.personal.d2b",
+      "env": "personal",
+      "state": "stopped",
+      "isNetVm": false,
+      "hidden": false,
+      "pendingRestart": false,
+      "features": { "graphics": false, "tpm": true, "usbip": true, "audio": false },
+      "capabilities": { "start": true, "stop": true, "forceStop": false, "restart": true, "switch": false, "build": true, "boot": true, "usbHotplug": true, "storeVerify": true, "terminal": true },
+      "readiness": [],
+      "usb": [],
+      "quickLaunch": []
+    }
+  ],
+  "realmGroups": [
+    {
+      "realmName": "Studio",
+      "realmId": "studio",
+      "realmColor": "#b8a1ff",
+      "workloads": [
+        {
+          "workloadName": "design",
+          "label": "Design workstation",
+          "canonicalTarget": "design.studio.d2b",
+          "legacyVmName": "design-vm",
+          "providerKind": "local-vm",
+          "availability": "ready",
+          "workloadState": "running",
+          "executionPosture": { "isolation": "virtual-machine" },
+          "launcherItems": [
+            { "id": "figma", "name": "Figma", "icon": { "name": "apps" }, "type": "exec", "graphical": true },
+            { "id": "shell", "name": "Shell", "icon": { "name": "terminal" }, "type": "shell", "graphical": false }
+          ]
+        },
+        {
+          "workloadName": "preview",
+          "label": "Local preview",
+          "canonicalTarget": "preview.studio.d2b",
+          "providerKind": "unsafe-local",
+          "availability": "ready",
+          "workloadState": "running",
+          "executionPosture": { "isolation": "unsafe-local" },
+          "launcherItems": [
+            { "id": "browser", "name": "Preview browser", "icon": { "name": "web-browser" }, "type": "exec", "graphical": true }
+          ]
+        }
+      ]
+    },
+    {
+      "realmName": "Engineering",
+      "realmId": "engineering",
+      "realmColor": "#67d7c4",
+      "workloads": [
+        {
+          "workloadName": "builder",
+          "label": "Build service",
+          "canonicalTarget": "builder.engineering.d2b",
+          "legacyVmName": "build-vm",
+          "providerKind": "local-vm",
+          "availability": "ready",
+          "workloadState": "starting",
+          "executionPosture": { "isolation": "virtual-machine" },
+          "launcherItems": [
+            { "id": "logs", "name": "Build logs", "icon": { "name": "monitoring" }, "type": "exec", "graphical": true }
+          ]
+        },
+        {
+          "workloadName": "docs",
+          "label": "Documentation",
+          "canonicalTarget": "docs.engineering.d2b",
+          "providerKind": "provider-managed",
+          "availability": "proxy-unavailable",
+          "workloadState": "stopped",
+          "executionPosture": { "isolation": "provider-managed" },
+          "launcherItems": [
+            { "id": "portal", "name": "Docs portal", "icon": { "name": "language" }, "type": "exec", "graphical": true }
+          ]
+        }
+      ]
+    },
+    {
+      "realmName": "Personal",
+      "realmId": "personal",
+      "realmColor": "#ef9f76",
+      "workloads": [
+        {
+          "workloadName": "archive",
+          "label": "Archive",
+          "canonicalTarget": "archive.personal.d2b",
+          "legacyVmName": "archive-vm",
+          "providerKind": "local-vm",
+          "availability": "ready",
+          "workloadState": "stopped",
+          "executionPosture": { "isolation": "virtual-machine" },
+          "launcherItems": [
+            { "id": "files", "name": "Files", "icon": { "name": "storage" }, "type": "exec", "graphical": true }
+          ]
+        },
+        {
+          "workloadName": "notes",
+          "label": "Notes",
+          "canonicalTarget": "notes.personal.d2b",
+          "providerKind": "unsafe-local",
+          "availability": "helper-unavailable",
+          "workloadState": "unknown",
+          "executionPosture": { "isolation": "unsafe-local" },
+          "launcherItems": [
+            { "id": "editor", "name": "Editor", "icon": { "name": "code" }, "type": "exec", "graphical": true }
+          ]
+        }
+      ]
+    },
+    {
+      "realmName": "Operations",
+      "realmId": "operations",
+      "realmColor": "#e4c76b",
+      "workloads": [
+        {
+          "workloadName": "monitor",
+          "label": "Fleet monitor",
+          "canonicalTarget": "monitor.operations.d2b",
+          "providerKind": "provider-managed",
+          "availability": "ready",
+          "workloadState": "running",
+          "executionPosture": { "isolation": "provider-managed" },
+          "launcherItems": [
+            { "id": "dashboard", "name": "Dashboard", "icon": { "name": "monitoring" }, "type": "exec", "graphical": true }
+          ]
+        },
+        {
+          "workloadName": "incident",
+          "label": "Incident console",
+          "canonicalTarget": "incident.operations.d2b",
+          "providerKind": "provider-managed",
+          "availability": "degraded",
+          "workloadState": "failed",
+          "executionPosture": { "isolation": "provider-managed" },
+          "launcherItems": [
+            { "id": "console", "name": "Console", "icon": { "name": "security" }, "type": "exec", "graphical": true }
+          ]
+        }
+      ]
+    }
+  ]
+}"##;
 
 unsafe extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
@@ -31,6 +259,89 @@ unsafe extern "C" {
 struct ProcessIdentity {
     pid: u32,
     start_time_ticks: u64,
+}
+
+/// Result of one panel focus transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusDisposition {
+    KeepOpen,
+    Close,
+}
+
+/// Focus/pin state for one panel process.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FocusLifecycle {
+    had_focus: bool,
+    pinned: bool,
+}
+
+impl FocusLifecycle {
+    pub fn had_focus(self) -> bool {
+        self.had_focus
+    }
+
+    pub fn pinned(self) -> bool {
+        self.pinned
+    }
+
+    pub fn set_pinned(&mut self, pinned: bool) {
+        self.pinned = pinned;
+    }
+
+    pub fn focus_changed(&mut self, focused: bool) -> FocusDisposition {
+        if focused {
+            self.had_focus = true;
+            FocusDisposition::KeepOpen
+        } else if self.had_focus && !self.pinned {
+            FocusDisposition::Close
+        } else {
+            FocusDisposition::KeepOpen
+        }
+    }
+}
+
+/// Logical-pixel size of the compositor-provided usable output area.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkArea {
+    pub width: i32,
+    pub height: i32,
+}
+
+/// Logical-pixel panel placement relative to the usable output area.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PanelPlacement {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl PanelPlacement {
+    pub const EDGE_GAP: i32 = 4;
+    pub const INITIAL_GAP: i32 = 24;
+
+    pub fn reset(area: WorkArea, panel: WorkArea) -> Self {
+        Self {
+            x: area.width - panel.width - Self::INITIAL_GAP,
+            y: Self::INITIAL_GAP,
+        }
+        .clamped(area, panel)
+    }
+
+    pub fn moved(self, dx: i32, dy: i32, area: WorkArea, panel: WorkArea) -> Self {
+        Self {
+            x: self.x.saturating_add(dx),
+            y: self.y.saturating_add(dy),
+        }
+        .clamped(area, panel)
+    }
+
+    pub fn clamped(self, area: WorkArea, panel: WorkArea) -> Self {
+        let max_x = (area.width - panel.width - Self::EDGE_GAP).max(Self::EDGE_GAP);
+        let max_y = (area.height - panel.height - Self::EDGE_GAP).max(Self::EDGE_GAP);
+        Self {
+            x: self.x.clamp(Self::EDGE_GAP, max_x),
+            y: self.y.clamp(Self::EDGE_GAP, max_y),
+        }
+    }
 }
 
 /// Open or hide the Quickshell control popup.
@@ -109,6 +420,373 @@ pub fn open(config: &Config) -> WlResult<()> {
     });
 
     Ok(())
+}
+
+/// Render deterministic mocked state through the production QML tree.
+///
+/// This requires a live Wayland compositor with layer-shell support. Live d2b
+/// status, USB discovery, and actions are disabled for the render process.
+pub fn render_sample(output: &Path) -> WlResult<()> {
+    require_wayland_session()?;
+    let output = explicit_output_path(output)?;
+    let parent = output.parent().ok_or_else(|| {
+        WlError::Config("render output must have an existing parent directory".to_owned())
+    })?;
+    if !parent.is_dir() {
+        return Err(WlError::Config(format!(
+            "render output parent does not exist: {}",
+            parent.display()
+        )));
+    }
+    if output.exists() {
+        fs::remove_file(&output)?;
+    }
+
+    let dir = runtime_dir()?.join("render-sample");
+    fs::create_dir_all(&dir)?;
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+    let qml_path = materialize_qml(&dir)?;
+
+    let mut child = Command::new("quickshell")
+        .arg("--no-color")
+        .arg("-v")
+        .arg("--path")
+        .arg(&qml_path)
+        .env("D2B_WLCONTROL_RENDER_OUTPUT", &output)
+        .env("D2B_WLCONTROL_RENDER_STATE_JSON", RENDER_STATE_JSON)
+        .env("D2B_WLCONTROL_THEME_JSON", RENDER_THEME_JSON)
+        .env("D2B_WLCONTROL_OBSERVABILITY_ENABLED", "1")
+        .env(
+            "D2B_WLCONTROL_OBSERVABILITY_SUCCESS",
+            "Mock actions are disabled",
+        )
+        .env("QT_LOGGING_TO_CONSOLE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| {
+            WlError::Config(format!(
+                "failed to launch quickshell render process; is quickshell installed/on PATH? {err}"
+            ))
+        })?;
+
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= RENDER_TIMEOUT {
+            let _ = child.kill();
+            let process_output = child.wait_with_output()?;
+            let _ = fs::remove_file(&output);
+            return Err(WlError::Config(format!(
+                "quickshell render timed out after {} seconds{}",
+                RENDER_TIMEOUT.as_secs(),
+                diagnostic_suffix(&process_output.stdout, &process_output.stderr)
+            )));
+        }
+        thread::sleep(Duration::from_millis(40));
+    };
+
+    let process_output = child.wait_with_output()?;
+    if !status.success() {
+        let _ = fs::remove_file(&output);
+        return Err(WlError::Config(format!(
+            "quickshell render failed with {status}{}",
+            diagnostic_suffix(&process_output.stdout, &process_output.stderr)
+        )));
+    }
+    if render_logs_contain(&process_output, INVALID_QML_ANCHOR_WARNING) {
+        let _ = fs::remove_file(&output);
+        return Err(WlError::Config(format!(
+            "quickshell render reported invalid anchor geometry{}",
+            diagnostic_suffix(&process_output.stdout, &process_output.stderr)
+        )));
+    }
+    normalize_rendered_png(&output)?;
+    validate_rendered_png(&output)?;
+    Ok(())
+}
+
+fn render_logs_contain(output: &std::process::Output, message: &str) -> bool {
+    String::from_utf8_lossy(&output.stdout).contains(message)
+        || String::from_utf8_lossy(&output.stderr).contains(message)
+}
+
+fn require_wayland_session() -> WlResult<()> {
+    let has_wayland_display = env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty());
+    let has_runtime_dir = env::var_os("XDG_RUNTIME_DIR").is_some_and(|value| !value.is_empty());
+    if has_wayland_display && has_runtime_dir {
+        Ok(())
+    } else {
+        Err(WlError::Config(
+            "render-sample requires a live Wayland session (WAYLAND_DISPLAY and XDG_RUNTIME_DIR)"
+                .to_owned(),
+        ))
+    }
+}
+
+fn explicit_output_path(path: &Path) -> WlResult<PathBuf> {
+    if path.as_os_str().is_empty() {
+        return Err(WlError::Config(
+            "render output path must not be empty".to_owned(),
+        ));
+    }
+    if path.is_absolute() {
+        Ok(path.to_owned())
+    } else {
+        Ok(env::current_dir()?.join(path))
+    }
+}
+
+fn diagnostic_suffix(stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    let text = [stdout.trim(), stderr.trim()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!(": {text}")
+    }
+}
+
+fn normalize_rendered_png(path: &Path) -> WlResult<()> {
+    let metadata = fs::metadata(path).map_err(|err| {
+        WlError::Config(format!(
+            "quickshell did not create render output {}: {err}",
+            path.display()
+        ))
+    })?;
+    if metadata.len() > MAX_RENDER_BYTES {
+        return Err(WlError::Config(format!(
+            "render output is {} bytes; maximum is {MAX_RENDER_BYTES}",
+            metadata.len()
+        )));
+    }
+
+    let bytes = fs::read(path)?;
+    if let Some(normalized) = normalize_png_bytes(&bytes, RENDER_WIDTH, RENDER_HEIGHT)? {
+        fs::write(path, normalized)?;
+    }
+    Ok(())
+}
+
+fn normalize_png_bytes(bytes: &[u8], width: u32, height: u32) -> WlResult<Option<Vec<u8>>> {
+    let decoder = png::Decoder::new(Cursor::new(bytes));
+    let mut reader = decoder
+        .read_info()
+        .map_err(|err| WlError::Config(format!("could not decode render PNG: {err}")))?;
+    if reader.info().width == 0
+        || reader.info().height == 0
+        || reader.info().width > width.saturating_mul(4)
+        || reader.info().height > height.saturating_mul(4)
+    {
+        return Err(WlError::Config(format!(
+            "render PNG dimensions {}x{} are outside the supported normalization range",
+            reader.info().width,
+            reader.info().height
+        )));
+    }
+    if reader.info().width == width && reader.info().height == height {
+        return Ok(None);
+    }
+
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buffer)
+        .map_err(|err| WlError::Config(format!("could not decode render PNG: {err}")))?;
+    let source = png_frame_to_rgba(&buffer[..info.buffer_size()], &info)?;
+    let resized = resize_rgba_nearest(&source, info.width, info.height, width, height);
+    Ok(Some(encode_rgba_png(&resized, width, height)?))
+}
+
+fn png_frame_to_rgba(bytes: &[u8], info: &png::OutputInfo) -> WlResult<Vec<u8>> {
+    if info.bit_depth != png::BitDepth::Eight {
+        return Err(WlError::Config(format!(
+            "render PNG uses unsupported {:?} channel depth",
+            info.bit_depth
+        )));
+    }
+
+    let pixels = u64::from(info.width)
+        .checked_mul(u64::from(info.height))
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or_else(|| WlError::Config("render PNG dimensions overflowed".to_owned()))?;
+    let mut rgba = Vec::with_capacity(pixels.saturating_mul(4));
+    match info.color_type {
+        png::ColorType::Rgba => rgba.extend_from_slice(bytes),
+        png::ColorType::Rgb => {
+            for pixel in bytes.chunks_exact(3) {
+                rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+            }
+        }
+        png::ColorType::Grayscale => {
+            for &value in bytes {
+                rgba.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            for pixel in bytes.chunks_exact(2) {
+                rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
+            }
+        }
+        png::ColorType::Indexed => {
+            return Err(WlError::Config(
+                "render PNG uses an unsupported indexed color format".to_owned(),
+            ));
+        }
+    }
+    if rgba.len() != pixels.saturating_mul(4) {
+        return Err(WlError::Config(
+            "render PNG has an incomplete pixel buffer".to_owned(),
+        ));
+    }
+    Ok(rgba)
+}
+
+fn resize_rgba_nearest(
+    source: &[u8],
+    source_width: u32,
+    source_height: u32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let mut resized = vec![
+        0;
+        (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(4)
+    ];
+    for y in 0..height {
+        let source_y = ((u64::from(y) * u64::from(source_height)) / u64::from(height))
+            .min(u64::from(source_height.saturating_sub(1))) as usize;
+        for x in 0..width {
+            let source_x = ((u64::from(x) * u64::from(source_width)) / u64::from(width))
+                .min(u64::from(source_width.saturating_sub(1))) as usize;
+            let source_offset = (source_y * source_width as usize + source_x) * 4;
+            let target_offset = (y as usize * width as usize + x as usize) * 4;
+            resized[target_offset..target_offset + 4]
+                .copy_from_slice(&source[source_offset..source_offset + 4]);
+        }
+    }
+    resized
+}
+
+fn encode_rgba_png(rgba: &[u8], width: u32, height: u32) -> WlResult<Vec<u8>> {
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|err| WlError::Config(format!("could not encode render PNG: {err}")))?;
+        writer
+            .write_image_data(rgba)
+            .map_err(|err| WlError::Config(format!("could not encode render PNG: {err}")))?;
+    }
+    Ok(encoded)
+}
+
+fn validate_rendered_png(path: &Path) -> WlResult<()> {
+    let metadata = fs::metadata(path).map_err(|err| {
+        WlError::Config(format!(
+            "quickshell did not create render output {}: {err}",
+            path.display()
+        ))
+    })?;
+    if metadata.len() > MAX_RENDER_BYTES {
+        return Err(WlError::Config(format!(
+            "render output is {} bytes; maximum is {MAX_RENDER_BYTES}",
+            metadata.len()
+        )));
+    }
+    let bytes = fs::read(path)?;
+    validate_png_bytes(&bytes, RENDER_WIDTH, RENDER_HEIGHT)?;
+    validate_png_is_non_uniform(&bytes)
+}
+
+fn validate_png_is_non_uniform(bytes: &[u8]) -> WlResult<()> {
+    let decoder = png::Decoder::new(Cursor::new(bytes));
+    let mut reader = decoder
+        .read_info()
+        .map_err(|err| WlError::Config(format!("could not decode render PNG: {err}")))?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buffer)
+        .map_err(|err| WlError::Config(format!("could not decode render PNG: {err}")))?;
+    let rgba = png_frame_to_rgba(&buffer[..info.buffer_size()], &info)?;
+    let mut first_visible_rgb = None;
+    for pixel in rgba.chunks_exact(4).filter(|pixel| pixel[3] != 0) {
+        let rgb = [pixel[0], pixel[1], pixel[2]];
+        if first_visible_rgb.is_some_and(|first| first != rgb) {
+            return Ok(());
+        }
+        first_visible_rgb.get_or_insert(rgb);
+    }
+    Err(WlError::Config(
+        "render output contains no visible color variation".to_owned(),
+    ))
+}
+
+fn validate_png_bytes(bytes: &[u8], expected_width: u32, expected_height: u32) -> WlResult<()> {
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if bytes.len() < 33 || &bytes[..8] != PNG_SIGNATURE {
+        return Err(WlError::Config(
+            "render output is not a PNG image".to_owned(),
+        ));
+    }
+    if &bytes[12..16] != b"IHDR" {
+        return Err(WlError::Config(
+            "render output has no leading PNG IHDR chunk".to_owned(),
+        ));
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().expect("four-byte PNG width"));
+    let height = u32::from_be_bytes(bytes[20..24].try_into().expect("four-byte PNG height"));
+    if (width, height) != (expected_width, expected_height) {
+        return Err(WlError::Config(format!(
+            "render output is {width}x{height}; expected {expected_width}x{expected_height}"
+        )));
+    }
+
+    let idat_payload = png_chunk_payload_bytes(bytes, b"IDAT")?;
+    if idat_payload < MIN_RENDER_PAYLOAD_BYTES {
+        return Err(WlError::Config(format!(
+            "render output has only {idat_payload} bytes of image payload"
+        )));
+    }
+    Ok(())
+}
+
+fn png_chunk_payload_bytes(bytes: &[u8], wanted: &[u8; 4]) -> WlResult<usize> {
+    let mut offset = 8_usize;
+    let mut payload = 0_usize;
+    while offset.saturating_add(12) <= bytes.len() {
+        let length = u32::from_be_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .expect("four-byte PNG chunk length"),
+        ) as usize;
+        let chunk_end = offset
+            .checked_add(12)
+            .and_then(|base| base.checked_add(length))
+            .ok_or_else(|| WlError::Config("render PNG chunk length overflowed".to_owned()))?;
+        if chunk_end > bytes.len() {
+            return Err(WlError::Config(
+                "render PNG contains a truncated chunk".to_owned(),
+            ));
+        }
+        if &bytes[offset + 4..offset + 8] == wanted {
+            payload = payload.saturating_add(length);
+        }
+        offset = chunk_end;
+    }
+    Ok(payload)
 }
 
 fn runtime_dir() -> WlResult<PathBuf> {
@@ -217,6 +895,7 @@ const QML_SOURCE: &str = r##"
 //@ pragma IconTheme Adwaita
 
 import QtQuick
+import QtQuick.Window
 import Quickshell
 import Quickshell.Io
 
@@ -224,15 +903,23 @@ ShellRoot {
   id: root
 
   property string backend: Quickshell.env("D2B_WLCONTROL_BIN") || "d2b-wlcontrol"
-  property var state: ({ connectivity: "daemon-down", role: "none", vms: [] })
+  property string renderOutput: Quickshell.env("D2B_WLCONTROL_RENDER_OUTPUT") || ""
+  property bool renderMode: renderOutput.length > 0
+  property bool renderCaptureComplete: false
+  property var state: renderMode
+    ? root.parseJsonObject(Quickshell.env("D2B_WLCONTROL_RENDER_STATE_JSON"))
+    : ({ connectivity: "daemon-down", role: "none", vms: [] })
   property var usbDevices: []
   property bool busy: false
   property string hoverHint: ""
   property string actionMessage: ""
   property bool actionFailed: false
   property bool actionBusy: false
-  property real panelTopMargin: 24
-  property real panelRightMargin: 24
+  property real panelX: 0
+  property real panelY: 0
+  property bool placementInitialized: false
+  property bool pinned: false
+  property bool hadFocus: false
   property string confirmKey: ""
   property int normalConfirmMs: 2200
   property int forceConfirmMs: 5200
@@ -470,14 +1157,20 @@ ShellRoot {
   }
 
   function reload() {
+    if (renderMode) return
     statusProc.exec([backend, "status-json"])
   }
 
   function reloadUsbDevices() {
+    if (renderMode) return
     usbDevicesProc.exec([backend, "usb-devices-json"])
   }
 
   function action(args) {
+    if (renderMode) {
+      hoverHint = "Actions are disabled in render-sample mode"
+      return
+    }
     busy = true
     actionBusy = true
     actionMessage = runningMessage(args)
@@ -721,11 +1414,11 @@ ShellRoot {
   }
 
   function screenWidth() {
-    return panel.screen ? panel.screen.width : 1280
+    return panel.width > 0 ? panel.width : 1280
   }
 
   function screenHeight() {
-    return panel.screen ? panel.screen.height : 1080
+    return panel.height > 0 ? panel.height : 1080
   }
 
   function clamp(value, min, max) {
@@ -733,8 +1426,8 @@ ShellRoot {
   }
 
   function movePanel(dx, dy) {
-    panelRightMargin = clamp(panelRightMargin - dx, 4, Math.max(4, screenWidth() - panel.width - 4))
-    panelTopMargin = clamp(panelTopMargin + dy, 4, Math.max(4, screenHeight() - panel.height - 4))
+    panelX = clamp(panelX + dx, 4, Math.max(4, screenWidth() - panelCard.width - 4))
+    panelY = clamp(panelY + dy, 4, Math.max(4, screenHeight() - panelCard.height - 4))
   }
 
   function panelContentHeight() {
@@ -742,9 +1435,33 @@ ShellRoot {
     return 32 + 12 + 1 + 12 + 26 + 12 + resultHeight + list.height + 32
   }
 
-  function reclampPanelMargins() {
-    panelRightMargin = clamp(panelRightMargin, 4, Math.max(4, screenWidth() - panel.width - 4))
-    panelTopMargin = clamp(panelTopMargin, 4, Math.max(4, screenHeight() - panel.height - 4))
+  function resetPanelPlacement() {
+    if (panel.width <= 0 || panel.height <= 0 || panelCard.width <= 0 || panelCard.height <= 0) return
+    panelX = clamp(panel.width - panelCard.width - 24, 4, Math.max(4, panel.width - panelCard.width - 4))
+    panelY = clamp(24, 4, Math.max(4, panel.height - panelCard.height - 4))
+    placementInitialized = true
+  }
+
+  function reclampPanelPlacement() {
+    if (!placementInitialized) {
+      resetPanelPlacement()
+      return
+    }
+    panelX = clamp(panelX, 4, Math.max(4, screenWidth() - panelCard.width - 4))
+    panelY = clamp(panelY, 4, Math.max(4, screenHeight() - panelCard.height - 4))
+  }
+
+  function handleFocusChanged(focused) {
+    if (renderMode) return
+    if (focused) {
+      hadFocus = true
+    } else if (hadFocus && !pinned) {
+      Qt.quit()
+    }
+  }
+
+  function closePanel() {
+    Qt.quit()
   }
 
   function disabledReason(vm, role, capability) {
@@ -858,14 +1575,49 @@ ShellRoot {
     }
   }
 
-  Component.onCompleted: reloadUsbDevices()
+  Connections {
+    target: panelCard.Window.window
+    function onActiveChanged() {
+      root.handleFocusChanged(panelCard.Window.active)
+    }
+  }
+
+  Component.onCompleted: {
+    root.pinned = false
+    Qt.callLater(root.resetPanelPlacement)
+    if (root.renderMode) {
+      root.pinned = true
+      renderCaptureTimer.start()
+    } else {
+      root.reloadUsbDevices()
+      Qt.callLater(() => root.handleFocusChanged(panelCard.Window.active))
+    }
+  }
 
   Timer {
     interval: 2500
-    running: true
+    running: !root.renderMode
     repeat: true
     triggeredOnStart: true
     onTriggered: if (!statusProc.running && !actionProc.running) root.reload()
+  }
+
+  Timer {
+    id: renderCaptureTimer
+    interval: 700
+    repeat: true
+    onTriggered: {
+      panelCard.grabToImage(function(result) {
+        if (root.renderCaptureComplete) return
+        if (result.saveToFile(root.renderOutput)) {
+          root.renderCaptureComplete = true
+          renderCaptureTimer.stop()
+          Qt.quit()
+        } else {
+          console.error("d2b-wlcontrol: failed to save render output " + root.renderOutput)
+        }
+      })
+    }
   }
 
   PanelWindow {
@@ -874,24 +1626,33 @@ ShellRoot {
     focusable: true
     aboveWindows: true
     exclusiveZone: 0
-    implicitWidth: 420
-    implicitHeight: Math.min(Math.max(240, root.panelContentHeight()), Math.floor(root.screenHeight() * 0.5))
     color: "transparent"
     surfaceFormat { opaque: false }
 
-    anchors { top: true; right: true }
-    margins { top: root.panelTopMargin; right: root.panelRightMargin }
-    onWidthChanged: root.reclampPanelMargins()
-    onHeightChanged: root.reclampPanelMargins()
-    onScreenChanged: root.reclampPanelMargins()
+    anchors { top: true; right: true; bottom: true; left: true }
+    mask: Region { item: panelCard }
+    onWidthChanged: root.reclampPanelPlacement()
+    onHeightChanged: root.reclampPanelPlacement()
+    onScreenChanged: root.reclampPanelPlacement()
+    onDevicePixelRatioChanged: root.reclampPanelPlacement()
 
     Rectangle {
-      anchors.fill: parent
+      id: panelCard
+      x: root.panelX
+      y: root.panelY
+      width: Math.min(420, Math.max(1, panel.width - 8))
+      height: root.renderMode
+        ? Math.min(640, Math.max(1, panel.height - 8))
+        : Math.min(Math.max(240, root.panelContentHeight()), Math.max(1, Math.floor(panel.height * 0.5)))
       radius: 18
       color: root.shellColor("background", "#0f1117")
       border.color: root.shellColor("border", "#2a2d35")
       border.width: 1
       clip: true
+      focus: true
+      Keys.onEscapePressed: root.closePanel()
+      onWidthChanged: root.reclampPanelPlacement()
+      onHeightChanged: root.reclampPanelPlacement()
 
       Column {
         id: shellContent
@@ -900,7 +1661,7 @@ ShellRoot {
         width: parent.width - 32
         height: parent.height - 32
         spacing: 12
-        onImplicitHeightChanged: root.reclampPanelMargins()
+        onImplicitHeightChanged: root.reclampPanelPlacement()
 
           Item {
             width: parent.width
@@ -910,14 +1671,21 @@ ShellRoot {
               id: dragHandle
               anchors.fill: parent
               acceptedButtons: Qt.LeftButton
-              property real lastX: 0
-              property real lastY: 0
+              property real lastPanelX: 0
+              property real lastPanelY: 0
               onPressed: (mouse) => {
-                lastX = mouse.x
-                lastY = mouse.y
+                const point = dragHandle.mapToItem(panel, mouse.x, mouse.y)
+                lastPanelX = point.x
+                lastPanelY = point.y
               }
               onPositionChanged: (mouse) => {
-                if (pressed) root.movePanel(mouse.x - lastX, mouse.y - lastY)
+                if (!pressed) return
+                const point = dragHandle.mapToItem(panel, mouse.x, mouse.y)
+                const dx = point.x - lastPanelX
+                const dy = point.y - lastPanelY
+                root.movePanel(dx, dy)
+                lastPanelX = point.x
+                lastPanelY = point.y
               }
             }
 
@@ -939,7 +1707,7 @@ ShellRoot {
 
             Text {
               anchors.centerIn: parent
-              width: parent.width - 160
+              width: parent.width - 220
               anchors.verticalCenter: parent.verticalCenter
               color: root.shellColor("foreground_strong", "#ffffff")
               font.pixelSize: 16
@@ -964,8 +1732,24 @@ ShellRoot {
                 text: "refresh"
                 tooltip: "Refresh VM status"
                 accent: root.shellColor("foreground_strong", "#ffffff")
-                enabled: !root.busy
+                enabled: !root.busy && !root.renderMode
                 onClicked: root.reload()
+              }
+              IconButton {
+                text: root.pinned ? "keep" : "keep_off"
+                tooltip: root.pinned ? "Unpin; the panel will close after focus leaves" : "Pin; keep the panel open when focus leaves"
+                accent: root.pinned ? root.hostAccentColor() : root.shellColor("muted", "#9399b2")
+                prominent: root.pinned
+                checked: root.pinned
+                enabled: true
+                onClicked: root.pinned = !root.pinned
+              }
+              IconButton {
+                text: "close"
+                tooltip: "Close control center"
+                accent: root.shellColor("foreground_strong", "#ffffff")
+                enabled: true
+                onClicked: root.closePanel()
               }
             }
           }
@@ -1016,11 +1800,18 @@ ShellRoot {
 
           Item {
             width: parent.width
-            height: Math.max(96, panel.height - y - 16)
+            height: Math.max(96, panelCard.height - y - 16)
+            clip: true
+            readonly property int scrollbarGutterWidth: 6
+            readonly property int scrollbarVerticalInset: 10
 
           Flickable {
             id: vmListFlickable
-            anchors.fill: parent
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.right: parent.right
+            anchors.rightMargin: parent.scrollbarGutterWidth + 8
             contentWidth: width
             contentHeight: list.implicitHeight
             clip: true
@@ -1039,24 +1830,16 @@ ShellRoot {
                   width: list.width
                   height: realmContent.implicitHeight + 18
                   radius: 13
-                  color: "transparent"
+                  color: modelData.realmColor || root.hostAccentColor()
                   clip: true
                   property var group: modelData
 
                   Rectangle {
-                    x: 0
-                    y: 0
-                    width: 5
-                    height: parent.height
-                    radius: 0
-                    color: modelData.realmColor || root.hostAccentColor()
-                  }
-                  Rectangle {
                     x: 5
-                    y: 0
-                    width: parent.width - 5
-                    height: parent.height
-                    radius: 10
+                    y: 1
+                    width: parent.width - 6
+                    height: parent.height - 2
+                    radius: 11
                     color: root.shellColor("surface", "#16181d")
                     border.color: root.shellColor("border", "#2a2d35")
                     border.width: 1
@@ -1730,16 +2513,29 @@ ShellRoot {
                 }
               }
             }
+          }
+
+            Item {
+              id: scrollbarGutter
+              anchors.top: parent.top
+              anchors.topMargin: parent.scrollbarVerticalInset
+              anchors.right: parent.right
+              anchors.bottom: parent.bottom
+              anchors.bottomMargin: parent.scrollbarVerticalInset
+              width: parent.scrollbarGutterWidth
+              clip: true
 
               Rectangle {
-                parent: vmListFlickable
+                id: scrollbarTrack
                 visible: vmListFlickable.contentHeight > vmListFlickable.height
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.rightMargin: 2
+                anchors.bottom: parent.bottom
                 width: 4
-                height: vmListFlickable.height
-                x: vmListFlickable.width - width
-                y: 0
                 radius: 999
                 color: root.shellColor("input_background", "#0d0d0d")
+                clip: true
 
                 Rectangle {
                   width: parent.width
@@ -1749,7 +2545,7 @@ ShellRoot {
                   y: (parent.height - height) * (vmListFlickable.contentY / Math.max(1, vmListFlickable.contentHeight - vmListFlickable.height))
                 }
               }
-          }
+            }
       }
     }
   }
@@ -1760,16 +2556,25 @@ ShellRoot {
     property string tooltip: ""
     property color accent: root.shellColor("muted", "#9399b2")
     property bool prominent: false
+    property bool checked: false
     signal clicked()
     width: prominent ? 30 : 26
     height: prominent ? 30 : 26
     radius: width / 2
+    activeFocusOnTab: true
     opacity: enabled ? 1.0 : 0.28
-    border.width: prominent ? 1 : 0
-    border.color: prominent ? accent : "transparent"
+    border.width: activeFocus ? 2 : (prominent ? 1 : 0)
+    border.color: activeFocus ? root.shellColor("foreground_strong", "#ffffff") : (prominent ? accent : "transparent")
     color: prominent
       ? Qt.rgba(accent.r, accent.g, accent.b, mouse.containsMouse ? 0.34 : 0.24)
       : (mouse.containsMouse ? Qt.rgba(accent.r, accent.g, accent.b, 0.12) : "transparent")
+    Accessible.name: tooltip
+    Accessible.role: Accessible.Button
+    Accessible.checkable: checked
+    Accessible.checked: checked
+    Accessible.onPressAction: if (enabled) clicked()
+    Keys.onSpacePressed: if (enabled) clicked()
+    Keys.onReturnPressed: if (enabled) clicked()
 
     Text {
       id: label
@@ -1997,9 +2802,9 @@ mod qml_tests {
     fn qml_source_smoke_covers_runtime_contract() {
         assert!(QML_SOURCE.contains("PanelWindow"));
         assert!(QML_SOURCE.contains("id: vmListFlickable"));
-        assert!(QML_SOURCE.contains("x: vmListFlickable.width - width"));
-        assert!(QML_SOURCE.contains("property real panelTopMargin: 24"));
-        assert!(QML_SOURCE.contains("property real panelRightMargin: 24"));
+        assert!(QML_SOURCE.contains("id: scrollbarGutter"));
+        assert!(QML_SOURCE.contains("property real panelX: 0"));
+        assert!(QML_SOURCE.contains("property real panelY: 0"));
         assert!(QML_SOURCE.contains("spacing: 8"));
         assert!(QML_SOURCE.contains("model: vm.quickLaunch || []"));
         assert!(QML_SOURCE.contains("[\"quick-launch\", vm.name, modelData.id]"));
@@ -2112,5 +2917,209 @@ mod qml_tests {
         assert!(!realm_vm_rows.contains("model: vm.quickLaunch || []"));
         assert!(!realm_vm_rows.contains("[\"terminal\", vm.name]"));
         assert!(!QML_SOURCE.contains("import QtQuick.Controls"));
+    }
+
+    #[test]
+    fn qml_focus_pin_and_close_lifecycle_is_guarded() {
+        assert!(QML_SOURCE.contains("property bool pinned: false"));
+        assert!(QML_SOURCE.contains("property bool hadFocus: false"));
+        assert!(QML_SOURCE.contains("function handleFocusChanged(focused)"));
+        assert!(QML_SOURCE.contains("else if (hadFocus && !pinned)"));
+        assert!(QML_SOURCE.contains("import QtQuick.Window"));
+        assert!(QML_SOURCE.contains("target: panelCard.Window.window"));
+        assert!(QML_SOURCE.contains("root.handleFocusChanged(panelCard.Window.active)"));
+        assert!(!QML_SOURCE.contains("Qt.application.state"));
+        assert!(QML_SOURCE.contains("text: root.pinned ? \"keep\" : \"keep_off\""));
+        assert!(QML_SOURCE.contains("checked: root.pinned"));
+        assert!(QML_SOURCE.contains("Keys.onEscapePressed: root.closePanel()"));
+        assert!(QML_SOURCE.contains("Accessible.name: tooltip"));
+        assert!(QML_SOURCE.contains("Keys.onSpacePressed: if (enabled) clicked()"));
+    }
+
+    #[test]
+    fn qml_uses_compositor_work_area_and_resets_top_right_placement() {
+        assert!(QML_SOURCE.contains("anchors { top: true; right: true; bottom: true; left: true }"));
+        assert!(QML_SOURCE.contains("exclusiveZone: 0"));
+        assert!(QML_SOURCE.contains("mask: Region { item: panelCard }"));
+        assert!(QML_SOURCE.contains("panel.width - panelCard.width - 24"));
+        assert!(QML_SOURCE.contains("onDevicePixelRatioChanged: root.reclampPanelPlacement()"));
+        assert!(!QML_SOURCE.contains("NIRI_SOCKET"));
+        assert!(!QML_SOURCE.contains("panelTopMargin"));
+        assert!(!QML_SOURCE.contains("panelRightMargin"));
+    }
+
+    #[test]
+    fn qml_scrollbar_has_a_dedicated_gutter_and_rounded_realm_frame() {
+        let flickable_start = QML_SOURCE
+            .find("id: vmListFlickable")
+            .expect("VM list flickable");
+        let gutter_start = QML_SOURCE[flickable_start..]
+            .find("id: scrollbarGutter")
+            .map(|offset| flickable_start + offset)
+            .expect("scrollbar gutter");
+        let track_start = QML_SOURCE[gutter_start..]
+            .find("id: scrollbarTrack")
+            .map(|offset| gutter_start + offset)
+            .expect("scrollbar track");
+        let thumb_start = QML_SOURCE[track_start..]
+            .find("Rectangle {\n                  width: parent.width")
+            .map(|offset| track_start + offset)
+            .expect("scrollbar thumb");
+        let flickable = &QML_SOURCE[flickable_start..gutter_start];
+        assert!(flickable.contains("anchors.right: parent.right"));
+        assert!(flickable.contains("anchors.rightMargin: parent.scrollbarGutterWidth + 8"));
+        assert!(QML_SOURCE.contains("readonly property int scrollbarVerticalInset: 10"));
+        assert!(!flickable.contains("anchors.right: scrollbarGutter.left"));
+
+        let gutter = &QML_SOURCE[gutter_start..track_start];
+        assert!(gutter.contains("width: parent.scrollbarGutterWidth"));
+        assert!(gutter.contains("anchors.topMargin: parent.scrollbarVerticalInset"));
+        assert!(gutter.contains("anchors.bottomMargin: parent.scrollbarVerticalInset"));
+        assert!(gutter.contains("clip: true"));
+        assert!(!gutter.contains("parent: vmListFlickable.parent"));
+
+        let track = &QML_SOURCE[track_start..thumb_start];
+        assert!(track.contains("anchors.rightMargin: 2"));
+        assert!(track.contains("clip: true"));
+
+        let realm_start = QML_SOURCE.find("id: realmCard").expect("realm card");
+        let realm_end = QML_SOURCE[realm_start..]
+            .find("id: realmContent")
+            .map(|offset| realm_start + offset)
+            .expect("realm content");
+        let realm_frame = &QML_SOURCE[realm_start..realm_end];
+        assert!(realm_frame.contains("radius: 13"));
+        assert!(realm_frame.contains("color: modelData.realmColor || root.hostAccentColor()"));
+        assert!(realm_frame.contains("x: 5"));
+        assert!(realm_frame.contains("y: 1"));
+        assert!(realm_frame.contains("radius: 11"));
+        assert!(!realm_frame.contains("radius: 0"));
+    }
+
+    #[test]
+    fn qml_render_mode_uses_production_tree_without_live_io() {
+        assert!(QML_SOURCE.contains("D2B_WLCONTROL_RENDER_OUTPUT"));
+        assert!(QML_SOURCE.contains("D2B_WLCONTROL_RENDER_STATE_JSON"));
+        assert!(QML_SOURCE.contains("if (renderMode) return"));
+        assert!(QML_SOURCE.contains("running: !root.renderMode"));
+        assert!(QML_SOURCE.contains("panelCard.grabToImage"));
+        assert!(!QML_SOURCE.contains("}, Qt.size("));
+        assert!(QML_SOURCE.contains("property bool renderCaptureComplete: false"));
+        assert!(QML_SOURCE.contains("renderCaptureTimer.stop()"));
+        assert!(QML_SOURCE.contains("result.saveToFile(root.renderOutput)"));
+    }
+}
+
+#[cfg(test)]
+mod behavior_tests {
+    use super::*;
+
+    #[test]
+    fn focus_lifecycle_ignores_startup_inactive_and_honors_pin() {
+        let mut lifecycle = FocusLifecycle::default();
+        assert_eq!(lifecycle.focus_changed(false), FocusDisposition::KeepOpen);
+        assert!(!lifecycle.had_focus());
+        assert!(!lifecycle.pinned());
+
+        assert_eq!(lifecycle.focus_changed(true), FocusDisposition::KeepOpen);
+        assert!(lifecycle.had_focus());
+        lifecycle.set_pinned(true);
+        assert_eq!(lifecycle.focus_changed(false), FocusDisposition::KeepOpen);
+        lifecycle.set_pinned(false);
+        assert_eq!(lifecycle.focus_changed(false), FocusDisposition::Close);
+    }
+
+    #[test]
+    fn placement_resets_top_right_and_clamps_after_area_changes() {
+        let panel = WorkArea {
+            width: 420,
+            height: 640,
+        };
+        let area = WorkArea {
+            width: 1920,
+            height: 1040,
+        };
+        assert_eq!(
+            PanelPlacement::reset(area, panel),
+            PanelPlacement { x: 1476, y: 24 }
+        );
+
+        let bottom_left = PanelPlacement::reset(area, panel).moved(-10_000, 10_000, area, panel);
+        assert_eq!(bottom_left, PanelPlacement { x: 4, y: 396 });
+
+        let smaller = WorkArea {
+            width: 1280,
+            height: 720,
+        };
+        assert_eq!(
+            bottom_left.clamped(smaller, panel),
+            PanelPlacement { x: 4, y: 76 }
+        );
+        assert_eq!(
+            PanelPlacement::reset(smaller, panel),
+            PanelPlacement { x: 836, y: 24 }
+        );
+    }
+
+    #[test]
+    fn png_validation_checks_signature_dimensions_and_payload() {
+        let mut png = Vec::new();
+        png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        png.extend_from_slice(&13_u32.to_be_bytes());
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&RENDER_WIDTH.to_be_bytes());
+        png.extend_from_slice(&RENDER_HEIGHT.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        png.extend_from_slice(&[0; 4]);
+        png.extend_from_slice(&(MIN_RENDER_PAYLOAD_BYTES as u32).to_be_bytes());
+        png.extend_from_slice(b"IDAT");
+        png.resize(png.len() + MIN_RENDER_PAYLOAD_BYTES, 0x5a);
+        png.extend_from_slice(&[0; 4]);
+
+        validate_png_bytes(&png, RENDER_WIDTH, RENDER_HEIGHT).expect("valid PNG structure");
+        assert!(validate_png_bytes(&png, RENDER_WIDTH + 1, RENDER_HEIGHT).is_err());
+        png[0] = 0;
+        assert!(validate_png_bytes(&png, RENDER_WIDTH, RENDER_HEIGHT).is_err());
+    }
+
+    #[test]
+    fn png_normalization_corrects_fractional_scale_rounding() {
+        let source_width = RENDER_WIDTH * 3 / 2;
+        let source_height = RENDER_HEIGHT * 3 / 2;
+        let mut source = vec![0; (source_width * source_height * 4) as usize];
+        for (index, value) in source.iter_mut().enumerate() {
+            *value = ((index * 37 + index / 13) % 251) as u8;
+        }
+        let png = encode_rgba_png(&source, source_width, source_height).expect("encode source PNG");
+        let normalized = normalize_png_bytes(&png, RENDER_WIDTH, RENDER_HEIGHT)
+            .expect("normalize PNG")
+            .expect("dimensions require normalization");
+
+        validate_png_bytes(&normalized, RENDER_WIDTH, RENDER_HEIGHT)
+            .expect("normalized PNG structure");
+        validate_png_is_non_uniform(&normalized).expect("normalized PNG has varied pixels");
+        assert!(
+            normalize_png_bytes(&normalized, RENDER_WIDTH, RENDER_HEIGHT)
+                .expect("inspect normalized PNG")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn png_validation_rejects_uniform_pixels() {
+        let source = vec![0x44; (RENDER_WIDTH * RENDER_HEIGHT * 4) as usize];
+        let png = encode_rgba_png(&source, RENDER_WIDTH, RENDER_HEIGHT).expect("encode source PNG");
+        assert!(validate_png_is_non_uniform(&png).is_err());
+    }
+
+    #[test]
+    fn mock_render_state_is_dense_and_host_independent() {
+        let state: serde_json::Value =
+            serde_json::from_str(RENDER_STATE_JSON).expect("mock state JSON");
+        assert_eq!(state["realmGroups"].as_array().map(Vec::len), Some(4));
+        assert_eq!(state["vms"].as_array().map(Vec::len), Some(3));
+        assert!(RENDER_STATE_JSON.contains("\"unsafe-local\""));
+        assert!(RENDER_STATE_JSON.contains("\"proxy-unavailable\""));
+        assert!(RENDER_STATE_JSON.contains("\"audio\""));
     }
 }
