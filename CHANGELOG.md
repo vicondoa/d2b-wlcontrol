@@ -22,6 +22,11 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
 
 ### Fixed
 
+- Deferred initial placement until the compositor work area and full panel size
+  are available, so the popup reliably opens top-right, and made the empty
+  center header an explicit drag target that does not compete with controls.
+- Sized the popup to its natural content height before scrolling, capped at 80%
+  of the compositor work area.
 - Reserved an inset, clipped scrollbar gutter so realm and VM content no longer
   extends under the track or into the rounded panel silhouette.
 - Removed duplicate workload launcher cards from realm panels. VM-backed
