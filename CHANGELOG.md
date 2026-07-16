@@ -17,8 +17,30 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
 
 ### Changed
 
+- Prepared the 2.0.0 client cutover by pinning the canonical
+  `d2b-client-toolkit` source distribution exactly, consuming its renamed
+  presentation-only color and Waybar crates, and keeping wlcontrol's normalized
+  state and reducer models repository-local.
+- Home Manager now owns the public d2b color-artifact path explicitly through
+  `programs.d2b-wlcontrol.colorArtifactPath`; neutral theme configuration
+  remains independent and Stylix-agnostic.
+- Package, workspace, release metadata, CI, and Nix source rewrites now use the
+  2.0.0 client-toolkit distribution and its immutable source layout.
 - Realm identity rails now use one rounded d2b-accent outer contour with a
   neutral inset, preserving the neutral shell palette.
+
+### Removed
+
+- Removed the copied public-socket transport, JSON wire definitions,
+  fake-daemon integration fixture, and public workload protocol fixtures.
+  Live daemon inventory and actions now fail closed until their canonical
+  service contracts are available; there is no legacy protocol fallback.
+
+### Security
+
+- Bound client sources to the canonical d2b revision and fingerprint exposed by
+  the exact toolkit source, without retaining copied framing, handshake,
+  request/response, or redaction types.
 
 ### Fixed
 

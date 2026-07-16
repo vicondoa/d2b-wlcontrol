@@ -10,7 +10,7 @@ description = "Waybar custom-module renderer for d2b-wlcontrol."
 
 [dependencies]
 wlcontrol-core.workspace = true
-d2b-wayland-waybar.workspace = true
+d2b-client-toolkit-waybar.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

@@ -107,6 +107,7 @@ environment metadata, then the deterministic d2b palette.
   programs.d2b-wlcontrol = {
     enable = true;
     publicSocketPath = "/run/d2b/public.sock";
+    colorArtifactPath = "/etc/d2b/ui-colors.json";
 
     launcherOverrides = [
       {
@@ -132,19 +133,19 @@ environment metadata, then the deterministic d2b palette.
 }
 ```
 
-The module writes the TOML, installs the package and CSS, injects the module at
-the selected position, and leaves arbitrary raw TOML/Waybar overrides available
-through `settings` and `waybar.module`. It never imports d2b's guest Home
-Manager module.
+The module writes the TOML, installs the package and CSS, owns the configurable
+public d2b color-artifact path, injects the module at the selected position, and
+leaves arbitrary raw TOML/Waybar overrides available through `settings` and
+`waybar.module`. The neutral theme stays independent and Stylix-agnostic. The
+module never imports d2b's guest Home Manager module.
 
 ## Input alignment
 
-The flake pins d2b-toolkit release `v0.2.0` at
-`v0.2.0` (resolved by `flake.lock` to
-`fde6af8b842718e7150f5056d4eba73093d4ad77`). Consumers composing desktop
-companions should keep one toolkit revision:
+The flake pins the `d2b-client-toolkit` source distribution exactly at
+`d1c136a4ad68d53674b4a87bd3d5d4664e14214d`. Consumers composing desktop
+companions should keep one client-toolkit revision:
 
 ```nix
-inputs.d2b-wlcontrol.inputs.d2b-toolkit.follows = "d2b-toolkit";
-inputs.d2b-wlterm.inputs.d2b-toolkit.follows = "d2b-toolkit";
+inputs.d2b-wlcontrol.inputs.d2b-client-toolkit.follows = "d2b-client-toolkit";
+inputs.d2b-wlterm.inputs.d2b-client-toolkit.follows = "d2b-client-toolkit";
 ```

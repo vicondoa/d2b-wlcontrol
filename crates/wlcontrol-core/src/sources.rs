@@ -1,10 +1,9 @@
 //! Normalized per-call source fragments.
 //!
-//! These are the **output contract of the protocol client** (`wlcontrol-d2b`)
-//! and the **input contract of the reducer** ([`crate::reduce`]). Keeping the
-//! dependency direction one-way (`wlcontrol-d2b` → `wlcontrol-core`) means
-//! the reducer never needs to know about d2b wire types: the protocol
-//! client translates raw d2b JSON into these neutral fragments.
+//! These are the repository-owned presentation inputs consumed by
+//! [`crate::reduce`]. They intentionally contain no d2b request, response,
+//! session, transport, or framing types. A future canonical service adapter may
+//! populate them after the owning d2b service contracts are content-frozen.
 
 use serde::{Deserialize, Serialize};
 
@@ -112,7 +111,7 @@ pub struct WorkloadInventory {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ReduceInput {
-    /// Overall connectivity as observed by the protocol client.
+    /// Overall connectivity as observed by the canonical client adapter.
     pub connectivity: Connectivity,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<Auth>,

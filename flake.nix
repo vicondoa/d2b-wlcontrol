@@ -3,8 +3,8 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit/v0.2.0";
+    d2b-client-toolkit = {
+      url = "github:vicondoa/d2b-toolkit/d1c136a4ad68d53674b4a87bd3d5d4664e14214d";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -13,7 +13,7 @@
     {
       self,
       nixpkgs,
-      d2b-toolkit,
+      d2b-client-toolkit,
     }:
     let
       systems = [
@@ -22,6 +22,7 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
       pkgsFor = system: import nixpkgs { inherit system; };
+      version = "2.0.0";
 
       runtimeBins =
         pkgs: with pkgs; [
@@ -35,14 +36,19 @@
         system:
         let
           pkgs = pkgsFor system;
-          toolkitSource = d2b-toolkit.packages.${system}.default;
+          clientToolkitSource = d2b-client-toolkit.packages.${system}.default;
         in
         {
           default = pkgs.rustPlatform.buildRustPackage {
             pname = "d2b-wlcontrol";
-            version = "0.2.0";
+            inherit version;
             src = pkgs.lib.cleanSource ./.;
-            cargoLock.lockFile = ./Cargo.lock;
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              outputHashes = {
+                "d2b-client-2.0.0" = "sha256-w5BQevSV+fMtSbfr5dLNZ3vvV45ZZGvdzA1Hx9zpn1A=";
+              };
+            };
 
             nativeBuildInputs = with pkgs; [ makeWrapper ];
 
@@ -61,14 +67,12 @@
 
             postPatch = ''
               substituteInPlace Cargo.toml \
-                --replace-fail "../d2b-toolkit/crates/d2b-client" \
-                  "${toolkitSource}/share/d2b-toolkit/crates/d2b-client" \
-                --replace-fail "../d2b-toolkit/crates/d2b-toolkit-core" \
-                  "${toolkitSource}/share/d2b-toolkit/crates/d2b-toolkit-core" \
-                --replace-fail "../d2b-toolkit/crates/d2b-wayland-core" \
-                  "${toolkitSource}/share/d2b-toolkit/crates/d2b-wayland-core" \
-                --replace-fail "../d2b-toolkit/crates/d2b-wayland-waybar" \
-                  "${toolkitSource}/share/d2b-toolkit/crates/d2b-wayland-waybar"
+                --replace-fail "../d2b-client-toolkit/crates/d2b-client-toolkit-waybar" \
+                  "${clientToolkitSource}/share/d2b-client-toolkit/distribution/crates/d2b-client-toolkit-waybar" \
+                --replace-fail "../d2b-client-toolkit/crates/d2b-client-toolkit-colors" \
+                  "${clientToolkitSource}/share/d2b-client-toolkit/distribution/crates/d2b-client-toolkit-colors" \
+                --replace-fail "../d2b-client-toolkit/crates/d2b-client-toolkit" \
+                  "${clientToolkitSource}/share/d2b-client-toolkit/distribution/crates/d2b-client-toolkit"
             '';
 
             meta = with pkgs.lib; {
@@ -138,6 +142,7 @@
               {
                 programs.d2b-wlcontrol = {
                   enable = true;
+                  colorArtifactPath = "/etc/d2b/custom-ui-colors.json";
                   launcherOverrides = [
                     {
                       target = "tools.host.d2b";
@@ -183,9 +188,21 @@
         in
         {
           package = self.packages.${system}.default;
-          home-manager-module = pkgs.runCommand "d2b-wlcontrol-home-manager-module" { } ''
+          release-metadata = pkgs.runCommand "d2b-wlcontrol-release-metadata-${version}" { } ''
+            grep -Fq 'version = "2.0.0"' ${./Cargo.toml}
+            grep -Fq '## [Unreleased]' ${./CHANGELOG.md}
+            grep -Fq 'd1c136a4ad68d53674b4a87bd3d5d4664e14214d' ${./Cargo.toml}
+            grep -Fq 'd1c136a4ad68d53674b4a87bd3d5d4664e14214d' ${./flake.lock}
+            test ! -e ${./.}/crates/wlcontrol-d2b/src/transport.rs
+            test ! -e ${./.}/crates/wlcontrol-d2b/src/wire.rs
+            test ! -e ${./.}/crates/wlcontrol-d2b/tests/public_socket.rs
+            test ! -e ${./.}/tests/fixtures/public-workload-v3-v1
+            touch $out
+          '';
+          home-manager-module = pkgs.runCommand "d2b-wlcontrol-home-manager-module-${version}" { } ''
             config=${hmEval.config.xdg.configFile."d2b-wlcontrol/config.toml".source}
             grep -q 'public_socket = "/run/d2b/public.sock"' "$config"
+            grep -q 'color_artifact_path = "/etc/d2b/custom-ui-colors.json"' "$config"
             grep -q 'icon = "◇"' "$config"
             grep -q 'label = "d2b"' "$config"
             grep -q 'target = "tools.host.d2b"' "$config"

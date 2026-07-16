@@ -15,8 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout d2b-toolkit sibling
-        run: git clone --depth 1 https://github.com/vicondoa/d2b-toolkit ../d2b-toolkit
+      - name: Checkout exact d2b client toolkit source
+        run: |
+          git init ../d2b-client-toolkit
+          git -C ../d2b-client-toolkit remote add origin https://github.com/vicondoa/d2b-toolkit
+          git -C ../d2b-client-toolkit fetch --depth 1 origin d1c136a4ad68d53674b4a87bd3d5d4664e14214d
+          git -C ../d2b-client-toolkit checkout --detach FETCH_HEAD
 
       - name: Install GTK system dependencies
         run: |

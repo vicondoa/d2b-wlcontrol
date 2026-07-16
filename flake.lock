@@ -1,23 +1,41 @@
 {
   "nodes": {
-    "d2b-toolkit": {
+    "d2b-client-toolkit": {
       "inputs": {
+        "d2b-src": "d2b-src",
         "nixpkgs": [
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1783797024,
-        "narHash": "sha256-AvaSbuCn48SsY37ZMP/EIMt5qx9DXuVbDEiMmsByMQw=",
+        "lastModified": 1784244602,
+        "narHash": "sha256-VwewfNdq+xQ+mmM3OHyr5spsOMMnT3SOwevv7DTeXmc=",
         "owner": "vicondoa",
         "repo": "d2b-toolkit",
-        "rev": "fde6af8b842718e7150f5056d4eba73093d4ad77",
+        "rev": "d1c136a4ad68d53674b4a87bd3d5d4664e14214d",
         "type": "github"
       },
       "original": {
         "owner": "vicondoa",
-        "ref": "v0.2.0",
         "repo": "d2b-toolkit",
+        "rev": "d1c136a4ad68d53674b4a87bd3d5d4664e14214d",
+        "type": "github"
+      }
+    },
+    "d2b-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784181052,
+        "narHash": "sha256-w5BQevSV+fMtSbfr5dLNZ3vvV45ZZGvdzA1Hx9zpn1A=",
+        "owner": "vicondoa",
+        "repo": "d2b",
+        "rev": "7e94327951d30913a1a6e0e7a47d4a24b462deff",
+        "type": "github"
+      },
+      "original": {
+        "owner": "vicondoa",
+        "repo": "d2b",
+        "rev": "7e94327951d30913a1a6e0e7a47d4a24b462deff",
         "type": "github"
       }
     },
@@ -39,7 +57,7 @@
     },
     "root": {
       "inputs": {
-        "d2b-toolkit": "d2b-toolkit",
+        "d2b-client-toolkit": "d2b-client-toolkit",
         "nixpkgs": "nixpkgs"
       }
     }
