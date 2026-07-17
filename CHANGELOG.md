@@ -20,7 +20,8 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
 - Prepared the 2.0.0 client cutover by pinning the canonical
   `d2b-client-toolkit` source distribution exactly, consuming its renamed
   presentation-only color and Waybar crates, and keeping wlcontrol's normalized
-  state and reducer models repository-local.
+  state and reducer models repository-local. Release metadata also binds the
+  canonical distribution fingerprint and source-inventory digest.
 - Home Manager now owns the public d2b color-artifact path explicitly through
   `programs.d2b-wlcontrol.colorArtifactPath`; neutral theme configuration
   remains independent and Stylix-agnostic.

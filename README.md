@@ -64,6 +64,13 @@ root-owned d2b launcher/state files.
 }
 ```
 
+This source pins client-toolkit commit
+`800c2878533f600d8f085b3d2aafcddb970232b2`, canonical d2b revision
+`4018d9c9652bd826c2e6a9abccdcdcafb832d944`, distribution fingerprint
+`c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838`, and
+inventory digest
+`2aaef697cc53abc8757a3593352cd5bd1d3f0d3f2031c6a2967f92afa5e74d97`.
+
 Install `inputs.d2b-wlcontrol.packages.${system}.default`, or use the host Home
 Manager module:
 
