@@ -54,7 +54,7 @@ root-owned d2b launcher/state files.
 ```nix
 {
   inputs.d2b-client-toolkit = {
-    url = "github:vicondoa/d2b-toolkit/d1c136a4ad68d53674b4a87bd3d5d4664e14214d";
+    url = "github:vicondoa/d2b-toolkit/800c2878533f600d8f085b3d2aafcddb970232b2";
     inputs.nixpkgs.follows = "nixpkgs";
   };
 

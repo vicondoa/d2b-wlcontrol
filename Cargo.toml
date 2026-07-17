@@ -40,9 +40,9 @@ directories = "5"
 
 [workspace.metadata.d2b-client-toolkit]
 version = "2.0.0"
-revision = "d1c136a4ad68d53674b4a87bd3d5d4664e14214d"
-d2b-source-revision = "7e94327951d30913a1a6e0e7a47d4a24b462deff"
-d2b-source-fingerprint = "0401d1f463d9dad49efd663d1493184e42954f624a029fbfd41c49f0323e5708"
+revision = "800c2878533f600d8f085b3d2aafcddb970232b2"
+d2b-source-revision = "4018d9c9652bd826c2e6a9abccdcdcafb832d944"
+d2b-source-fingerprint = "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
 
 [profile.release]
 opt-level = 2

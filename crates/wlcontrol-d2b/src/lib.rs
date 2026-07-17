@@ -68,11 +68,11 @@ mod tests {
     fn binds_the_exact_canonical_source() {
         assert_eq!(
             CLIENT_SOURCE_REVISION,
-            "7e94327951d30913a1a6e0e7a47d4a24b462deff"
+            "4018d9c9652bd826c2e6a9abccdcdcafb832d944"
         );
         assert_eq!(
             CLIENT_SOURCE_FINGERPRINT,
-            "0401d1f463d9dad49efd663d1493184e42954f624a029fbfd41c49f0323e5708"
+            "c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838"
         );
     }
 

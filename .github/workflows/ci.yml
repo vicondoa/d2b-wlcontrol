@@ -19,7 +19,7 @@ jobs:
         run: |
           git init ../d2b-client-toolkit
           git -C ../d2b-client-toolkit remote add origin https://github.com/vicondoa/d2b-toolkit
-          git -C ../d2b-client-toolkit fetch --depth 1 origin d1c136a4ad68d53674b4a87bd3d5d4664e14214d
+          git -C ../d2b-client-toolkit fetch --depth 1 origin 800c2878533f600d8f085b3d2aafcddb970232b2
           git -C ../d2b-client-toolkit checkout --detach FETCH_HEAD
 
       - name: Install GTK system dependencies

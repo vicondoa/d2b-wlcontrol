@@ -413,7 +413,7 @@ dependencies = [
 [[package]]
 name = "d2b-client"
 version = "2.0.0"
-source = "git+https://github.com/vicondoa/d2b?rev=7e94327951d30913a1a6e0e7a47d4a24b462deff#7e94327951d30913a1a6e0e7a47d4a24b462deff"
+source = "git+https://github.com/vicondoa/d2b?rev=4018d9c9652bd826c2e6a9abccdcdcafb832d944#4018d9c9652bd826c2e6a9abccdcdcafb832d944"
 dependencies = [
  "async-trait",
  "d2b-contracts",
@@ -456,7 +456,7 @@ dependencies = [
 [[package]]
 name = "d2b-contracts"
 version = "2.0.0"
-source = "git+https://github.com/vicondoa/d2b?rev=7e94327951d30913a1a6e0e7a47d4a24b462deff#7e94327951d30913a1a6e0e7a47d4a24b462deff"
+source = "git+https://github.com/vicondoa/d2b?rev=4018d9c9652bd826c2e6a9abccdcdcafb832d944#4018d9c9652bd826c2e6a9abccdcdcafb832d944"
 dependencies = [
  "async-trait",
  "protobuf",
@@ -469,7 +469,7 @@ dependencies = [
 [[package]]
 name = "d2b-session"
 version = "2.0.0"
-source = "git+https://github.com/vicondoa/d2b?rev=7e94327951d30913a1a6e0e7a47d4a24b462deff#7e94327951d30913a1a6e0e7a47d4a24b462deff"
+source = "git+https://github.com/vicondoa/d2b?rev=4018d9c9652bd826c2e6a9abccdcdcafb832d944#4018d9c9652bd826c2e6a9abccdcdcafb832d944"
 dependencies = [
  "async-trait",
  "d2b-contracts",
