@@ -11,3 +11,6 @@ description = "Canonical d2b client adapter boundary for d2b-wlcontrol."
 [dependencies]
 wlcontrol-core.workspace = true
 d2b-client-toolkit.workspace = true
+nix.workspace = true
+sha2.workspace = true
+tokio.workspace = true

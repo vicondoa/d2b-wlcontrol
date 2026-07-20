@@ -13,12 +13,20 @@ exercise inventory conflicts, missing status, authorization, unsafe-local
 posture, launcher overrides, audio errors, color selection, and stable Waybar
 output without a daemon or copied protocol fixture.
 
-Live source fragments and actions may be connected only through canonical
-`d2b-client-toolkit` service clients after the owning service contracts are
-available. Until then, the adapter returns disconnected state and rejects
-daemon actions. It does not retain the removed JSON transport or infer a future
-route, endpoint, notification, or desktop-action API.
+Live local-VM fragments come from the canonical toolkit's authenticated
+`DaemonClient` inspection projection. The adapter preserves typed pagination
+and read-model consistency, normalizes only VM runtimes into VM presentation
+rows, and maps only the frozen start/stop/restart lifecycle methods. A
+successfully authenticated session proves launcher read posture but not admin
+authority, so admin controls remain disabled until d2b exposes a canonical
+caller-role projection.
+
+User/Shell/Notify/Wayland service kinds are available as canonical types, but
+their live endpoint and route acquisition remains runtime-owned. Wlcontrol
+therefore does not instantiate desktop observer/action flows, translate their
+DTOs, or fall back to a legacy socket, file, CLI callback, or direct compositor.
 
 Realm, VM, and state accents continue to come from the configured public d2b UI
 color artifact. The neutral popup theme remains independently configurable and
-does not depend on Stylix.
+does not depend on Stylix. Non-VM projections are never normalized into VM
+rows, so VM borders and controls cannot be attached to unsafe-local apps.

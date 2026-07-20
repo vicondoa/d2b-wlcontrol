@@ -142,11 +142,11 @@ module never imports d2b's guest Home Manager module.
 ## Input alignment
 
 The flake pins the `d2b-client-toolkit` source distribution exactly at
-`800c2878533f600d8f085b3d2aafcddb970232b2`, backed by canonical d2b revision
-`4018d9c9652bd826c2e6a9abccdcdcafb832d944`, distribution fingerprint
-`c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838`, and
+`3d6b75d47c8df66c1722ea324d64334a127d43ec`, backed by canonical d2b revision
+`9dc902243cdd7aba7ef269988b96f0aae6e037da`, distribution fingerprint
+`5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043`, and
 inventory digest
-`2aaef697cc53abc8757a3593352cd5bd1d3f0d3f2031c6a2967f92afa5e74d97`.
+`35c33c2e23e1b9f03b5abc3bbca2d3320e38c42dfc7aceb7e3476d28210cde8c`.
 Consumers composing desktop companions should keep one client-toolkit revision:
 
 ```nix

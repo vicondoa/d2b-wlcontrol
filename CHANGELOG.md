@@ -27,6 +27,13 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
   remains independent and Stylix-agnostic.
 - Package, workspace, release metadata, CI, and Nix source rewrites now use the
   2.0.0 client-toolkit distribution and its immutable source layout.
+- The canonical client adapter now establishes an authenticated local
+  ComponentSession, consumes the frozen daemon inspection read model, and maps
+  start/stop/restart to typed daemon lifecycle calls. It conservatively reports
+  launcher read authority until a canonical caller-role projection exists.
+- Toolkit metadata now pins the frozen user/desktop service source and exposes
+  canonical daemon plus User/Shell/Notify/Wayland service kinds without local
+  protocol copies.
 - Realm identity rails now use one rounded d2b-accent outer contour with a
   neutral inset, preserving the neutral shell palette.
 
@@ -34,14 +41,17 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
 
 - Removed the copied public-socket transport, JSON wire definitions,
   fake-daemon integration fixture, and public workload protocol fixtures.
-  Live daemon inventory and actions now fail closed until their canonical
-  service contracts are available; there is no legacy protocol fallback.
+  Daemon inspection and frozen lifecycle methods now use the canonical
+  authenticated client; unrouted services fail closed with no legacy fallback.
 
 ### Security
 
 - Bound client sources to the canonical d2b revision and fingerprint exposed by
   the exact toolkit source, without retaining copied framing, handshake,
   request/response, or redaction types.
+- Desktop observer/action and non-daemon service routes remain unavailable
+  until the runtime supplies authenticated routing; there is no socket, file,
+  CLI, or direct-compositor fallback.
 
 ### Fixed
 

@@ -31,8 +31,8 @@ over surfaces d2b already exposes.
 
 `d2b-wlcontrol` consumes only canonical operator-facing client surfaces:
 
-- the exact canonical source distributed by `d2b-client-toolkit`; live daemon
-  adapters remain absent until their owning service contracts are frozen; and
+- the exact canonical source distributed by `d2b-client-toolkit`, including
+  authenticated local daemon inspection and frozen lifecycle methods; and
 - where a CLI boundary is genuinely better UX (configured launch, detached
   guest terminal exec, or non-shell build), the official `d2b` CLI; and
 - `d2b-wlterm` for typed persistent-shell items addressed by canonical
@@ -47,8 +47,9 @@ It MUST NEVER:
   example `/var/lib/d2b/vms/<vm>/state/audio-state.json`);
 - read private launcher artifacts or connect to unsafe-local helper sockets;
 - construct commands as shell strings (always argv vectors);
-- assume capabilities from filesystem permissions instead of
-  `d2b auth status`.
+- infer admin authority from socket permissions or session reachability. An
+  authenticated daemon session proves only the minimum launcher read posture
+  until a canonical role projection is available.
 
 These are hard rules. See "Don'ts" below.
 
@@ -86,9 +87,9 @@ types belong in `wlcontrol-core` (see "The core contract").
 `crates/wlcontrol-core/src/model.rs` is the **frozen cross-crate
 contract**. Every other crate builds against it:
 
-- `wlcontrol-d2b` is the canonical client adapter boundary. Until the service
-  contracts are frozen it fails live operations closed and does not populate
-  source fragments.
+- `wlcontrol-d2b` is the canonical client adapter boundary. It normalizes the
+  frozen daemon inspection projection and maps only frozen lifecycle methods.
+  Operations whose authenticated route is not runtime-owned fail closed.
 - `wlcontrol-waybar` and `wlcontrol-ui` render `WlState`.
 - `wlcontrol-cli` dispatches `PlannedAction`.
 

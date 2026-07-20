@@ -36,25 +36,29 @@ repository-local transport and wire definitions are not supported.
   color metadata from a configurable artifact path; neutral popup colors remain
   independently configurable and Stylix-agnostic.
 
-The current canonical source cut does not yet expose the content-frozen daemon
-inventory/action or desktop-notification service adapters required by the
-control center. Live refresh and socket actions therefore fail closed rather
-than retaining the former public-JSON implementation or guessing future APIs.
+The canonical client adapter now establishes an authenticated ComponentSession
+to the fixed local daemon endpoint and consumes its typed inspection read
+model. Frozen start/stop/restart requests use the typed daemon client. The
+session does not expose the caller's admin mapping, so wlcontrol conservatively
+enables only launcher-level controls; admin controls stay disabled. Desktop
+observer/action, User/Shell/Notify/Wayland, device, audio, and other routes that
+still depend on integrated runtime routing fail closed with no legacy fallback.
 
 ## Trust boundary
 
 The control center talks to `/run/d2b/public.sock`, invokes the official `d2b`
 CLI for exact configured launch/build boundaries, invokes `d2b-wlterm` for
-persistent shells, and uses the configured browser opener. It never contacts
-the broker socket, invokes `sudo`, reads private helper state, or reads
-root-owned d2b launcher/state files.
+persistent shells, and uses the configured browser opener. The socket carries
+only the canonical authenticated ComponentSession service. Wlcontrol never
+contacts the broker socket, invokes `sudo`, reads private helper state, or
+reads root-owned d2b launcher/state files.
 
 ## Install
 
 ```nix
 {
   inputs.d2b-client-toolkit = {
-    url = "github:vicondoa/d2b-toolkit/800c2878533f600d8f085b3d2aafcddb970232b2";
+    url = "github:vicondoa/d2b-toolkit/3d6b75d47c8df66c1722ea324d64334a127d43ec";
     inputs.nixpkgs.follows = "nixpkgs";
   };
 
@@ -65,11 +69,11 @@ root-owned d2b launcher/state files.
 ```
 
 This source pins client-toolkit commit
-`800c2878533f600d8f085b3d2aafcddb970232b2`, canonical d2b revision
-`4018d9c9652bd826c2e6a9abccdcdcafb832d944`, distribution fingerprint
-`c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838`, and
+`3d6b75d47c8df66c1722ea324d64334a127d43ec`, canonical d2b revision
+`9dc902243cdd7aba7ef269988b96f0aae6e037da`, distribution fingerprint
+`5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043`, and
 inventory digest
-`2aaef697cc53abc8757a3593352cd5bd1d3f0d3f2031c6a2967f92afa5e74d97`.
+`35c33c2e23e1b9f03b5abc3bbca2d3320e38c42dfc7aceb7e3476d28210cde8c`.
 
 Install `inputs.d2b-wlcontrol.packages.${system}.default`, or use the host Home
 Manager module:
