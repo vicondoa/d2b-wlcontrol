@@ -142,7 +142,7 @@ module never imports d2b's guest Home Manager module.
 ## Input alignment
 
 The flake pins the `d2b-client-toolkit` source distribution exactly at
-`3d6b75d47c8df66c1722ea324d64334a127d43ec`, backed by canonical d2b revision
+`926de54e7320599c373524a10b65aaf13b6ff422`, backed by canonical d2b revision
 `9dc902243cdd7aba7ef269988b96f0aae6e037da`, distribution fingerprint
 `5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043`, and
 inventory digest

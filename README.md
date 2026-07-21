@@ -58,7 +58,7 @@ reads root-owned d2b launcher/state files.
 ```nix
 {
   inputs.d2b-client-toolkit = {
-    url = "github:vicondoa/d2b-toolkit/3d6b75d47c8df66c1722ea324d64334a127d43ec";
+    url = "github:vicondoa/d2b-toolkit/926de54e7320599c373524a10b65aaf13b6ff422";
     inputs.nixpkgs.follows = "nixpkgs";
   };
 
@@ -69,7 +69,7 @@ reads root-owned d2b launcher/state files.
 ```
 
 This source pins client-toolkit commit
-`3d6b75d47c8df66c1722ea324d64334a127d43ec`, canonical d2b revision
+`926de54e7320599c373524a10b65aaf13b6ff422`, canonical d2b revision
 `9dc902243cdd7aba7ef269988b96f0aae6e037da`, distribution fingerprint
 `5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043`, and
 inventory digest

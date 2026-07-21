@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     d2b-client-toolkit = {
-      url = "github:vicondoa/d2b-toolkit/3d6b75d47c8df66c1722ea324d64334a127d43ec";
+      url = "github:vicondoa/d2b-toolkit/926de54e7320599c373524a10b65aaf13b6ff422";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -191,8 +191,8 @@
           release-metadata = pkgs.runCommand "d2b-wlcontrol-release-metadata-${version}" { } ''
             grep -Fq 'version = "2.0.0"' ${./Cargo.toml}
             grep -Fq '## [Unreleased]' ${./CHANGELOG.md}
-            grep -Fq '3d6b75d47c8df66c1722ea324d64334a127d43ec' ${./Cargo.toml}
-            grep -Fq '3d6b75d47c8df66c1722ea324d64334a127d43ec' ${./flake.lock}
+            grep -Fq '926de54e7320599c373524a10b65aaf13b6ff422' ${./Cargo.toml}
+            grep -Fq '926de54e7320599c373524a10b65aaf13b6ff422' ${./flake.lock}
             grep -Fq '9dc902243cdd7aba7ef269988b96f0aae6e037da' ${./Cargo.toml}
             grep -Fq '5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043' ${./Cargo.toml}
             grep -Fq '35c33c2e23e1b9f03b5abc3bbca2d3320e38c42dfc7aceb7e3476d28210cde8c' ${./Cargo.toml}

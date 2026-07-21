@@ -42,7 +42,7 @@ tokio = { version = "1", features = ["net", "rt", "time"] }
 
 [workspace.metadata.d2b-client-toolkit]
 version = "2.0.0"
-revision = "3d6b75d47c8df66c1722ea324d64334a127d43ec"
+revision = "926de54e7320599c373524a10b65aaf13b6ff422"
 d2b-source-revision = "9dc902243cdd7aba7ef269988b96f0aae6e037da"
 d2b-source-fingerprint = "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
 inventory-revision = "9dc902243cdd7aba7ef269988b96f0aae6e037da"
