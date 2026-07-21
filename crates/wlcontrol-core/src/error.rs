@@ -12,7 +12,7 @@ pub enum WlError {
     #[error("d2bd is unreachable: {0}")]
     DaemonDown(String),
 
-    /// The public-socket peer rejected the handshake or denied the request.
+    /// The canonical client session denied the request.
     #[error("d2bd denied the request: {0}")]
     Denied(String),
 
@@ -24,7 +24,7 @@ pub enum WlError {
     #[error("configuration error: {0}")]
     Config(String),
 
-    /// A wire-protocol framing / serialization failure.
+    /// A canonical client protocol failure.
     #[error("protocol error: {0}")]
     Protocol(String),
 

@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "2.0.0"
 edition = "2021"
 rust-version = "1.94"
 license = "Apache-2.0"
@@ -21,11 +21,14 @@ authors = ["vicondoa"]
 wlcontrol-core = { path = "crates/wlcontrol-core" }
 wlcontrol-d2b = { path = "crates/wlcontrol-d2b" }
 
-# Shared d2b desktop toolkit crates.
-d2b-client = { path = "../d2b-toolkit/crates/d2b-client", version = "=0.2.0" }
-d2b-toolkit-core = { path = "../d2b-toolkit/crates/d2b-toolkit-core", version = "=0.2.0" }
-d2b-wayland-core = { path = "../d2b-toolkit/crates/d2b-wayland-core", version = "=0.2.0" }
-d2b-wayland-waybar = { path = "../d2b-toolkit/crates/d2b-wayland-waybar", version = "=0.2.0" }
+# Canonical client distribution and presentation-only helpers, pinned to the
+# exact toolkit revision (see [workspace.metadata.d2b-client-toolkit] below).
+# These are Cargo git dependencies, not adjacent workspace path dependencies:
+# a plain checkout of this repository builds hermetically without a sibling
+# `d2b-client-toolkit` checkout on disk.
+d2b-client-toolkit = { git = "https://github.com/vicondoa/d2b-toolkit", rev = "926de54e7320599c373524a10b65aaf13b6ff422", features = ["host-socket"] }
+d2b-client-toolkit-colors = { git = "https://github.com/vicondoa/d2b-toolkit", rev = "926de54e7320599c373524a10b65aaf13b6ff422" }
+d2b-client-toolkit-waybar = { git = "https://github.com/vicondoa/d2b-toolkit", rev = "926de54e7320599c373524a10b65aaf13b6ff422" }
 
 # Shared third-party dependencies. Versions are pinned at the workspace
 # level so every crate speaks the same serde / error surface.
@@ -36,14 +39,18 @@ toml = "0.8"
 png = "0.17"
 
 clap = { version = "4", features = ["derive"] }
-nix = { version = "0.29", features = ["socket", "uio"] }
+nix = { version = "0.29", features = ["socket", "uio", "user", "poll"] }
 directories = "5"
-futures = "0.3"
+sha2 = "0.10"
+tokio = { version = "1", features = ["net", "rt", "time"] }
 
-[workspace.metadata.d2b-toolkit]
-version = "0.2.0"
-tag = "v0.2.0"
-rev = "fde6af8b842718e7150f5056d4eba73093d4ad77"
+[workspace.metadata.d2b-client-toolkit]
+version = "2.0.0"
+revision = "926de54e7320599c373524a10b65aaf13b6ff422"
+d2b-source-revision = "9dc902243cdd7aba7ef269988b96f0aae6e037da"
+d2b-source-fingerprint = "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+inventory-revision = "9dc902243cdd7aba7ef269988b96f0aae6e037da"
+inventory-sha256 = "35c33c2e23e1b9f03b5abc3bbca2d3320e38c42dfc7aceb7e3476d28210cde8c"
 
 [profile.release]
 opt-level = 2

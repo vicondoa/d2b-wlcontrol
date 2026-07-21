@@ -20,6 +20,7 @@ let
   executable = if cfg.package != null then lib.getExe cfg.package else "d2b-wlcontrol";
   baseSettings = {
     public_socket = cfg.publicSocketPath;
+    color_artifact_path = cfg.colorArtifactPath;
     refresh_interval_ms = cfg.refreshIntervalMs;
     command_timeout_ms = cfg.commandTimeoutMs;
     waybar = {
@@ -70,6 +71,12 @@ in
       type = lib.types.str;
       default = "/run/d2b/public.sock";
       description = "Path to d2bd's public operator socket.";
+    };
+
+    colorArtifactPath = lib.mkOption {
+      type = lib.types.str;
+      default = "/etc/d2b/ui-colors.json";
+      description = "Path to d2b's public UI color artifact used for realm, VM, and state accents.";
     };
 
     refreshIntervalMs = lib.mkOption {

@@ -4,17 +4,16 @@ A Waybar indicator and Quickshell control center for
 [d2b](https://github.com/vicondoa/d2b) on niri and other Wayland
 desktops.
 
-`d2b-wlcontrol` consumes d2b's public workload inventory and groups local VMs,
-provider-managed workloads, and explicitly unsafe host workloads by realm. It
-keeps the existing VM lifecycle, USB, store, audio, and guest-terminal controls
-while rendering configured workload launchers without private files or
-VM-shaped assumptions.
+`d2b-wlcontrol` owns the presentation model, reducer, Waybar output, and
+Quickshell control center for d2b workloads. Its 2.0 client boundary consumes
+the exact canonical d2b client source distributed by `d2b-client-toolkit`;
+repository-local transport and wire definitions are not supported.
 
 ## Highlights
 
-- **Public workload cards.** Canonical target, provider, isolation/execution
-  posture, availability, and every configured `exec` or `shell` item come from
-  d2bd's public socket.
+- **Presentation-owned workload cards.** Canonical targets, provider posture,
+  availability, and configured items remain normalized into repository-local
+  view models without redefining their wire representation.
 - **Generic launcher items.** Each item owns its label and icon. Browser,
   observability, terminal, and application entries are ordinary configured
   items rather than hardcoded UI variants.
@@ -34,30 +33,47 @@ VM-shaped assumptions.
   JSON object per refresh with bounded classes. Unsafe posture may add only the
   stable `unsafe-local` / `mixed-isolation` classes.
 - **d2b colors.** Realm accents and VM/state colors still use d2b's public UI
-  color metadata; neutral popup colors remain independently configurable and
-  Stylix-agnostic.
+  color metadata from a configurable artifact path; neutral popup colors remain
+  independently configurable and Stylix-agnostic.
+
+The canonical client adapter now establishes an authenticated ComponentSession
+to the fixed local daemon endpoint and consumes its typed inspection read
+model. Frozen start/stop/restart requests use the typed daemon client. The
+session does not expose the caller's admin mapping, so wlcontrol conservatively
+enables only launcher-level controls; admin controls stay disabled. Desktop
+observer/action, User/Shell/Notify/Wayland, device, audio, and other routes that
+still depend on integrated runtime routing fail closed with no legacy fallback.
 
 ## Trust boundary
 
 The control center talks to `/run/d2b/public.sock`, invokes the official `d2b`
 CLI for exact configured launch/build boundaries, invokes `d2b-wlterm` for
-persistent shells, and uses the configured browser opener. It never contacts
-the broker socket, invokes `sudo`, reads private helper state, or reads
-root-owned d2b launcher/state files.
+persistent shells, and uses the configured browser opener. The socket carries
+only the canonical authenticated ComponentSession service. Wlcontrol never
+contacts the broker socket, invokes `sudo`, reads private helper state, or
+reads root-owned d2b launcher/state files.
 
 ## Install
 
 ```nix
 {
-  inputs.d2b-toolkit.url =
-    "github:vicondoa/d2b-toolkit/v0.2.0";
-  inputs.d2b-toolkit.inputs.nixpkgs.follows = "nixpkgs";
+  inputs.d2b-client-toolkit = {
+    url = "github:vicondoa/d2b-toolkit/926de54e7320599c373524a10b65aaf13b6ff422";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
 
   inputs.d2b-wlcontrol.url = "github:vicondoa/d2b-wlcontrol";
   inputs.d2b-wlcontrol.inputs.nixpkgs.follows = "nixpkgs";
-  inputs.d2b-wlcontrol.inputs.d2b-toolkit.follows = "d2b-toolkit";
+  inputs.d2b-wlcontrol.inputs.d2b-client-toolkit.follows = "d2b-client-toolkit";
 }
 ```
+
+This source pins client-toolkit commit
+`926de54e7320599c373524a10b65aaf13b6ff422`, canonical d2b revision
+`9dc902243cdd7aba7ef269988b96f0aae6e037da`, distribution fingerprint
+`5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043`, and
+inventory digest
+`35c33c2e23e1b9f03b5abc3bbca2d3320e38c42dfc7aceb7e3476d28210cde8c`.
 
 Install `inputs.d2b-wlcontrol.packages.${system}.default`, or use the host Home
 Manager module:
@@ -68,6 +84,7 @@ Manager module:
 
   programs.d2b-wlcontrol = {
     enable = true;
+    colorArtifactPath = "/etc/d2b/ui-colors.json";
     waybar = {
       enable = true;
       modulesList = "modules-right";
@@ -78,10 +95,11 @@ Manager module:
 }
 ```
 
-The module installs wlcontrol, writes its TOML, installs the starter Waybar CSS,
-injects the custom module without an `interval`, and preserves module placement,
-click-action, icon/label, CSS, and launcher-item overrides. It is a host module;
-it does not import d2b's guest-only Home Manager component.
+The module installs wlcontrol, writes its TOML, owns the configurable public d2b
+color-artifact path, installs the starter Waybar CSS, injects the custom module
+without an `interval`, and preserves module placement, click-action,
+icon/label, CSS, and launcher-item overrides. It remains a host module and does
+not import d2b's guest-only Home Manager component or Stylix.
 
 ## Waybar and niri
 
@@ -103,7 +121,7 @@ pinned or dragged within the compositor-provided usable output area.
 ```bash
 export PATH="$(echo ~/.rustup/toolchains/1.94.1-*/bin):/home/paydro/.nix-profile/bin:$PATH"
 export CARGO_BUILD_RUSTC_WRAPPER=''
-export CARGO_TARGET_DIR=/home/paydro/.cache/d2b-wlcontrol-target
+export CARGO_TARGET_DIR="$PWD/.cargo-target"
 
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -121,6 +139,7 @@ d2b-wlcontrol render-sample --output "$PWD/wlcontrol-panel.png"
 ## Documentation
 
 - [Configuration](docs/reference/configuration.md)
+- [Presentation model](docs/reference/presentation-model.md)
 - [Controls](docs/reference/controls.md)
 - [Waybar](docs/how-to/configure-waybar.md)
 - [niri / Wayland](docs/how-to/configure-niri.md)

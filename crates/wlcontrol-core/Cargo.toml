@@ -9,8 +9,7 @@ authors.workspace = true
 description = "Domain model, config, reducers, and action planning for d2b-wlcontrol."
 
 [dependencies]
-d2b-toolkit-core.workspace = true
-d2b-wayland-core.workspace = true
+d2b-client-toolkit-colors.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

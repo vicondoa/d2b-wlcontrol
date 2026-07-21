@@ -728,7 +728,7 @@ impl ActionAvailability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "dispatch")]
 pub enum PlannedAction {
-    /// A d2b public-socket intent the protocol client should execute.
+    /// A daemon action intent for a future canonical service adapter.
     Socket { intent: SocketIntent },
     /// A host process, expressed as an argv vector.
     Process {
@@ -738,8 +738,10 @@ pub enum PlannedAction {
     },
 }
 
-/// A typed d2b public-socket intent. The protocol client maps each variant
-/// onto the corresponding `PublicRequest`.
+/// A presentation-owned daemon action intent.
+///
+/// This is planner state, not a request DTO. A canonical service adapter maps
+/// it only after the owning service contract is available.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "intent")]
 pub enum SocketIntent {

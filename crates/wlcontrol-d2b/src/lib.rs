@@ -1,69 +1,69 @@
-//! Direct d2bd public-socket client.
+//! Canonical authenticated d2b client adapter boundary.
 //!
-//! - connect to the non-abstract `SOCK_SEQPACKET` socket at the configured path;
-//! - send the `Hello` negotiation frame and enforce the selected version range;
-//! - length-prefix (4-byte little-endian) every JSON request frame;
-//! - read bounded responses and map `PublicResponse::Error` /
-//!   `MutatingVerbResponse` into typed [`WlError`] values;
-//! - translate raw d2b wire JSON into the neutral [`ReduceInput`] fragments.
-//!
-//! The protocol/transport details live in [`wire`]; high-level intents live on
-//! [`D2bClient`].
+//! Local daemon inspection and lifecycle calls use the exact service clients
+//! distributed by `d2b-client-toolkit`. Desktop observer/action routing remains
+//! unavailable until the integrated runtime supplies its authenticated route.
 
-use std::{path::Path, time::Duration};
-
-use d2b_client::ensure_allowed_socket;
-use d2b_toolkit_core::{
-    CapabilitySet as ToolkitCapabilitySet,
-    DisplayEnvironmentPosture as ToolkitDisplayEnvironmentPosture,
-    EnvironmentPosture as ToolkitEnvironmentPosture,
-    ExecutionIdentityPosture as ToolkitExecutionIdentityPosture, Hello, HelloFrame, HelloOk,
-    HelloRejected, HelloRejectedReason, HelloResponse, IsolationPosture as ToolkitIsolationPosture,
-    KnownFeatureFlag, LauncherExecArgs, LauncherItemKind as ToolkitLauncherItemKind, OperationId,
-    ProtocolToken, PublicRequest, PublicResponse, SemverRange,
-    SessionPersistencePosture as ToolkitSessionPersistencePosture, SocketClass,
-    WorkloadAvailability as ToolkitWorkloadAvailability,
-    WorkloadExecutionPosture as ToolkitWorkloadExecutionPosture, WorkloadListArgs, WorkloadOp,
-    WorkloadOpResponse, WorkloadProviderKind as ToolkitWorkloadProviderKind,
-    WorkloadPublicSummary as ToolkitWorkloadPublicSummary, WorkloadState as ToolkitWorkloadState,
-    WorkloadStatusArgs, WorkloadTarget,
+use std::{
+    collections::BTreeSet,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    os::fd::{AsFd, AsRawFd, OwnedFd},
+    path::{Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use serde::Deserialize;
-use serde_json::{Map, Value};
-use wlcontrol_core::error::{WlError, WlResult};
-use wlcontrol_core::model::{
-    AudioChannel, AudioChannelState, AudioEnforcementPosture, AudioProviderKind, AuthRole,
-    Connectivity, DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
-    IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary, RealmLauncherEntry,
-    RuntimeState, SessionPersistencePosture, SocketIntent, UsbClaim, VmAudioState, VmCapabilities,
-    VmFeatures, WorkloadAvailability, WorkloadExecutionPosture, WorkloadProviderKind,
-    WorkloadRuntimeState,
+
+use d2b_client_toolkit::contracts::{
+    v2_identity::{RealmId, RealmPath},
+    v2_services::{common, daemon, MAX_PAGE_SIZE},
 };
-use wlcontrol_core::sources::{
-    AudioStatus, AudioStatusEntry, AudioStatusError, Auth, Inventory, InventoryVm, ReduceInput,
-    UsbProbe, VmStatus, WorkloadInventory,
+use d2b_client_toolkit::{
+    daemon_call_options, local_daemon_endpoint_identity, CancellationToken, Client, ClientError,
+    DaemonClient, DaemonLifecycleRequest, DaemonMethod, HandshakeCredentials, HostSocketConnector,
+    RouteRecord, RouteTable, ServiceKind, ServiceOwner, TargetInput, TransportKind,
+    TransportSelection,
 };
-use wlcontrol_core::Config;
+use nix::{
+    errno::Errno,
+    poll::{poll, PollFd, PollFlags, PollTimeout},
+    sys::socket::{
+        connect, getsockopt, socket, sockopt, AddressFamily, SockFlag, SockType, UnixAddr,
+    },
+    unistd::{Gid, Uid, User},
+};
+use sha2::{Digest, Sha256};
+use tokio::runtime::{Builder, Runtime};
+use wlcontrol_core::{
+    error::{WlError, WlResult},
+    model::{AuthRole, Connectivity, RuntimeState, SocketIntent, VmCapabilities, VmFeatures},
+    sources::{Auth, Inventory, InventoryVm, ReduceInput, VmStatus},
+    Config,
+};
 
-mod transport;
-pub mod wire;
+pub use d2b_client_toolkit::{
+    D2B_SOURCE_FINGERPRINT as CLIENT_SOURCE_FINGERPRINT,
+    D2B_SOURCE_REVISION as CLIENT_SOURCE_REVISION,
+};
 
-use transport::SeqpacketTransport;
+const MAX_PAGES: usize = 1024;
+const ROUTING_UNAVAILABLE: &str =
+    "the frozen canonical service has no authenticated route for this operation";
 
-const CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
+/// Bounded retry budget for a nonblocking `connect(2)` that races an
+/// `AF_UNIX` `SOCK_SEQPACKET` listener whose backlog is momentarily full
+/// (Linux reports this as `EAGAIN`, not `ECONNREFUSED`). Each attempt is a
+/// fresh `connect(2)` syscall, not a poll cycle.
+const CONNECT_RETRY_ATTEMPTS: u32 = 20;
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(10);
+/// Bounded budget for polling a connect-in-progress (`EINPROGRESS`) fd for
+/// writability before treating the connect as failed.
+const CONNECT_POLL_ATTEMPTS: u32 = 50;
+const CONNECT_POLL_TIMEOUT_MS: u16 = 100;
 
-/// Outcome of a single dispatched mutating intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchOutcome {
-    /// Human-facing one-line summary suitable for the UI.
     pub summary: String,
 }
 
-/// A connected (or connectable) d2bd public-socket client.
-///
-/// The client is cheap to construct and does not hold a persistent connection;
-/// each call connects, negotiates, performs the request, and closes. This keeps
-/// the daemon-down/auth-denied posture observable on every refresh.
 #[derive(Debug, Clone)]
 pub struct D2bClient {
     socket_path: String,
@@ -71,7 +71,6 @@ pub struct D2bClient {
 }
 
 impl D2bClient {
-    /// Build a client from user configuration.
     pub fn new(config: &Config) -> Self {
         Self {
             socket_path: config.public_socket.clone(),
@@ -79,1727 +78,792 @@ impl D2bClient {
         }
     }
 
-    /// The configured public-socket path.
     pub fn socket_path(&self) -> &str {
         &self.socket_path
     }
 
-    /// The per-operation timeout.
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
 
-    /// Collect one full refresh bundle from the daemon's fast status model.
-    ///
     pub fn refresh(&self) -> ReduceInput {
-        match self.try_refresh() {
-            Ok(input) => input,
-            Err(WlError::Denied(_)) => ReduceInput {
-                connectivity: Connectivity::Connected,
-                auth: Some(Auth {
-                    role: AuthRole::None,
-                }),
-                ..Default::default()
-            },
-            Err(_) => ReduceInput {
-                connectivity: Connectivity::DaemonDown,
-                ..Default::default()
-            },
-        }
-    }
-
-    /// Fallible refresh variant useful for tests and diagnostics.
-    pub fn try_refresh(&self) -> WlResult<ReduceInput> {
-        let auth = self.request(request_auth_status)?;
-
-        // After auth succeeds, one unfiltered status read gives wlcontrol the
-        // daemon-maintained fast model. Do not run per-VM status or deep USB
-        // probe calls on the UI refresh path.
-        let status = self.request(request_status_model)?;
-        let audio = self.request(request_audio_status).ok();
-        let workloads = self.workload_inventory().ok();
-
-        Ok(ReduceInput {
-            connectivity: Connectivity::Connected,
-            auth: Some(auth),
-            inventory: Some(status.inventory),
-            statuses: status.statuses,
-            usb: Some(status.usb),
-            audio,
-            workloads,
+        self.refresh_result().unwrap_or_else(|_| ReduceInput {
+            connectivity: Connectivity::DaemonDown,
+            ..Default::default()
         })
     }
 
-    /// Read the public configured-workload inventory.
-    pub fn workload_inventory(&self) -> WlResult<WorkloadInventory> {
-        self.request(request_workload_inventory)
+    fn refresh_result(&self) -> WlResult<ReduceInput> {
+        let runtime = client_runtime()?;
+        let projections = runtime
+            .block_on(async {
+                tokio::time::timeout(self.timeout, async {
+                    let daemon = connect_daemon(&self.socket_path).await?;
+                    inspect_all(&daemon, None).await
+                })
+                .await
+            })
+            .map_err(|_| WlError::Timeout(format!("{:?}", self.timeout)))?
+            .map_err(map_client_error)?;
+        Ok(reduce_input(projections))
     }
 
-    /// Read one canonical public workload status.
-    pub fn workload_status(&self, target: &str) -> WlResult<RealmLauncherEntry> {
-        let target = WorkloadTarget::parse(target)
-            .map_err(|error| WlError::Config(format!("invalid workload target: {error}")))?;
-        self.request(|transport| request_workload_status(transport, target))
-    }
-
-    /// Execute a configured public launcher item with a caller-stable operation ID.
-    pub fn launcher_exec(
-        &self,
-        target: &str,
-        item_id: &str,
-        operation_id: &str,
-    ) -> WlResult<DispatchOutcome> {
-        let target = WorkloadTarget::parse(target)
-            .map_err(|error| WlError::Config(format!("invalid workload target: {error}")))?;
-        let item_id = ProtocolToken::parse(item_id)
-            .map_err(|error| WlError::Config(format!("invalid launcher item: {error}")))?;
-        let operation_id = OperationId::parse(operation_id)
-            .map_err(|error| WlError::Config(format!("invalid operation id: {error}")))?;
-        self.request(|transport| request_launcher_exec(transport, target, item_id, operation_id))
-    }
-
-    /// Dispatch a single typed socket intent (`vm start`, `usb attach`, ...).
     pub fn dispatch(&self, intent: &SocketIntent) -> WlResult<DispatchOutcome> {
-        let transport = self.connect_and_handshake()?;
-        match intent {
-            SocketIntent::List => {
-                let inventory = request_inventory(&transport)?;
-                Ok(DispatchOutcome {
-                    summary: format!("listed {} VM(s)", inventory.vms.len()),
+        let plan = DispatchPlan::from_intent(intent)?;
+        let runtime = client_runtime()?;
+        runtime
+            .block_on(async {
+                tokio::time::timeout(self.timeout, async {
+                    let daemon = connect_daemon(&self.socket_path).await?;
+                    dispatch_plan(&daemon, plan).await
                 })
+                .await
+            })
+            .map_err(|_| WlError::Timeout(format!("{:?}", self.timeout)))?
+            .map_err(map_client_error)
+    }
+}
+
+enum DispatchPlan<'a> {
+    Inspect(Option<&'a str>),
+    Lifecycle {
+        method: DaemonMethod,
+        desired_state: common::DesiredState,
+        resource_id: &'a str,
+        operation: &'static str,
+    },
+}
+
+impl<'a> DispatchPlan<'a> {
+    fn from_intent(intent: &'a SocketIntent) -> WlResult<Self> {
+        let plan = match intent {
+            SocketIntent::List => Self::Inspect(None),
+            SocketIntent::Status { vm } => Self::Inspect(Some(vm)),
+            SocketIntent::VmStart { vm } => Self::Lifecycle {
+                method: DaemonMethod::Start,
+                desired_state: common::DesiredState::DESIRED_STATE_RUNNING,
+                resource_id: vm,
+                operation: "start",
+            },
+            SocketIntent::VmStop { vm, force: false } => Self::Lifecycle {
+                method: DaemonMethod::Stop,
+                desired_state: common::DesiredState::DESIRED_STATE_STOPPED,
+                resource_id: vm,
+                operation: "stop",
+            },
+            SocketIntent::VmRestart { vm } => Self::Lifecycle {
+                method: DaemonMethod::Restart,
+                desired_state: common::DesiredState::DESIRED_STATE_RUNNING,
+                resource_id: vm,
+                operation: "restart",
+            },
+            SocketIntent::AuthStatus
+            | SocketIntent::UsbProbe
+            | SocketIntent::VmStop { force: true, .. }
+            | SocketIntent::Switch { .. }
+            | SocketIntent::Boot { .. }
+            | SocketIntent::UsbAttach { .. }
+            | SocketIntent::UsbDetach { .. }
+            | SocketIntent::StoreVerify { .. }
+            | SocketIntent::AudioMute { .. }
+            | SocketIntent::AudioSetVolume { .. }
+            | SocketIntent::AudioOff { .. } => {
+                return Err(WlError::D2b(ROUTING_UNAVAILABLE.to_owned()));
             }
-            SocketIntent::Status { vm } => {
-                let status = request_status(&transport, vm)?;
-                Ok(DispatchOutcome {
-                    summary: format!("{} status: {:?}", status.name, status.state),
-                })
-            }
-            SocketIntent::AuthStatus => {
-                let auth = request_auth_status(&transport)?;
-                Ok(DispatchOutcome {
-                    summary: format!("auth role: {:?}", auth.role),
-                })
-            }
-            SocketIntent::UsbProbe => {
-                let probe = request_usb_probe(&transport)?;
-                Ok(DispatchOutcome {
-                    summary: format!("probed {} USB claim(s)", probe.claims.len()),
-                })
-            }
-            SocketIntent::VmStart { vm } => dispatch_mutating(
-                &transport,
-                "vmStart",
-                json_values([
-                    ("vm", Value::String(vm.clone())),
-                    ("noWaitApi", Value::Bool(true)),
-                ]),
-            ),
-            SocketIntent::VmStop { vm, force } => {
-                dispatch_mutating(&transport, "vmStop", vm_stop_fields(vm, *force))
-            }
-            SocketIntent::VmRestart { vm } => dispatch_mutating(
-                &transport,
-                "vmRestart",
-                json_values([
-                    ("vm", Value::String(vm.clone())),
-                    ("noWaitApi", Value::Bool(true)),
-                ]),
-            ),
-            SocketIntent::Switch { vm } => {
-                dispatch_mutating(&transport, "switch", json_object([("vm", vm.clone())]))
-            }
-            SocketIntent::Boot { vm } => {
-                dispatch_mutating(&transport, "boot", json_object([("vm", vm.clone())]))
-            }
-            SocketIntent::UsbAttach { vm, bus_id } => dispatch_mutating(
-                &transport,
-                "usbipBind",
-                json_object([("vm", vm.clone()), ("busId", bus_id.clone())]),
-            ),
-            SocketIntent::UsbDetach { vm, bus_id } => dispatch_mutating(
-                &transport,
-                "usbipUnbind",
-                json_object([("vm", vm.clone()), ("busId", bus_id.clone())]),
-            ),
-            SocketIntent::StoreVerify { vm } => {
-                let value = request_value(
-                    &transport,
-                    frame(
-                        "storeVerify",
-                        json_values([
-                            ("vm", Value::String(vm.clone())),
-                            ("repair", Value::Bool(false)),
-                        ]),
-                    )?,
-                )?;
-                let response = parse_store_verify(value)?;
-                Ok(DispatchOutcome {
-                    summary: format!(
-                        "store verify {}: status={} checked={} drifted={} repaired={}",
-                        response.vm,
-                        response.status,
-                        response.checked,
-                        response.drifted,
-                        response.repaired
-                    ),
-                })
-            }
-            SocketIntent::AudioMute { vm, channel, mute } => {
-                dispatch_audio_mute(&transport, vm, *channel, *mute)
-            }
-            SocketIntent::AudioSetVolume {
-                vm,
-                channel,
-                level_percent,
-            } => dispatch_audio_set_volume(&transport, vm, *channel, *level_percent),
-            SocketIntent::AudioOff { vm } => dispatch_audio_off(&transport, vm),
-        }
-    }
-
-    fn request<T>(&self, request: impl FnOnce(&SeqpacketTransport) -> WlResult<T>) -> WlResult<T> {
-        let transport = self.connect_and_handshake()?;
-        request(&transport)
-    }
-
-    fn connect_and_handshake(&self) -> WlResult<SeqpacketTransport> {
-        reject_privileged_broker_socket(&self.socket_path)?;
-        let transport = SeqpacketTransport::connect(Path::new(&self.socket_path), self.timeout)?;
-        transport.send_payload(&hello_frame()?)?;
-        parse_hello_reply(&transport.recv_payload()?)?;
-        Ok(transport)
+        };
+        Ok(plan)
     }
 }
 
-fn audio_off_error_is_fatal(error: &WlError) -> bool {
-    !matches!(error, WlError::D2b(_))
-}
-
-fn dispatch_audio_off(transport: &SeqpacketTransport, vm: &str) -> WlResult<DispatchOutcome> {
-    // Privacy boundary: try the microphone first, and only continue after
-    // daemon-side D2b errors. Fatal transport/protocol errors mean the socket is
-    // no longer trustworthy for a second request.
-    let microphone = match dispatch_audio_mute(transport, vm, AudioChannel::Microphone, true) {
-        Ok(outcome) => Ok(outcome),
-        Err(err) if audio_off_error_is_fatal(&err) => return Err(err),
-        Err(err) => Err(err),
-    };
-    let speaker = match dispatch_audio_mute(transport, vm, AudioChannel::Speaker, true) {
-        Ok(outcome) => Ok(outcome),
-        Err(err) if audio_off_error_is_fatal(&err) => return Err(err),
-        Err(err) => Err(err),
-    };
-    match (microphone, speaker) {
-        (Ok(_), Ok(_)) => Ok(DispatchOutcome {
-            summary: format!("audio {vm} disabled"),
-        }),
-        (Err(err), Ok(_)) | (Ok(_), Err(err)) => Err(err),
-        (Err(microphone), Err(speaker)) => Err(WlError::D2b(format!(
-            "audio {vm} disable failed: microphone: {microphone}; speaker: {speaker}"
-        ))),
-    }
-}
-
-fn request_auth_status(transport: &SeqpacketTransport) -> WlResult<Auth> {
-    let value = request_value(transport, frame_empty("authStatus")?)?;
-    let payload = response_payload(value, "authStatusResponse", "auth status", None)?;
-    let payload = payload.get("auth").unwrap_or(&payload);
-    Ok(Auth {
-        role: map_auth_role(payload.get("role").and_then(Value::as_str)),
-    })
-}
-
-fn request_inventory(transport: &SeqpacketTransport) -> WlResult<Inventory> {
-    let value = request_value(
-        transport,
-        frame(
-            "list",
-            json_values([("env", Value::Null), ("vm", Value::Null)]),
-        )?,
-    )?;
-    let payload = response_payload(value, "listResponse", "list", None)?;
-    let vms = payload
-        .get("vms")
-        .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(inventory_vm_from_value).collect())
-        .unwrap_or_default();
-    Ok(Inventory { vms })
-}
-
-fn request_status(transport: &SeqpacketTransport, vm: &str) -> WlResult<VmStatus> {
-    Ok(request_status_snapshot(transport, vm)?.status)
-}
-
-fn request_status_snapshot(transport: &SeqpacketTransport, vm: &str) -> WlResult<StatusSnapshot> {
-    let value = request_value(
-        transport,
-        frame(
-            "status",
-            json_values([
-                ("checkBridges", Value::Bool(false)),
-                ("vm", Value::String(vm.to_owned())),
-            ]),
-        )?,
-    )?;
-    let payload = response_payload(value, "statusResponse", "status", Some("status"))?;
-    status_snapshot_from_payload(&payload, vm).ok_or_else(|| {
-        WlError::Protocol(format!(
-            "status response did not contain an entry for VM '{vm}'"
-        ))
-    })
-}
-
-fn request_status_model(transport: &SeqpacketTransport) -> WlResult<StatusModelSnapshot> {
-    let value = request_value(
-        transport,
-        frame(
-            "status",
-            json_values([("checkBridges", Value::Bool(false)), ("vm", Value::Null)]),
-        )?,
-    )?;
-    let payload = response_payload(value, "statusResponse", "status", None)?;
-    status_model_from_payload(&payload)
-        .ok_or_else(|| WlError::Protocol("status response did not contain VM entries".to_owned()))
-}
-
-fn request_usb_probe(transport: &SeqpacketTransport) -> WlResult<UsbProbe> {
-    let value = request_value(transport, frame_empty("usbipProbe")?)?;
-    if value.get("type").and_then(Value::as_str) == Some("mutatingVerbResponse") {
-        let response: MutatingVerbResponse = serde_json::from_value(response_payload(
-            value,
-            "mutatingVerbResponse",
-            "mutating verb",
-            None,
-        )?)?;
-        return Err(mutating_response_error(response));
-    }
-    let payload = response_payload(value, "usbipProbeResponse", "usb probe", None)?;
-    let claims = payload
-        .get("entries")
-        .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(usb_claim_from_value).collect())
-        .unwrap_or_default();
-    Ok(UsbProbe { claims })
-}
-
-fn request_audio_status(transport: &SeqpacketTransport) -> WlResult<AudioStatus> {
-    let value = request_value(
-        transport,
-        audio_frame("status", json_values([("vms", Value::Array(Vec::new()))]))?,
-    )?;
-    let payload = response_payload(value, "audioOpResponse", "audio", None)?;
-    if payload.get("op").and_then(Value::as_str) != Some("status") {
-        return Err(WlError::Protocol(
-            "audio status response carried a different operation".to_owned(),
-        ));
-    }
-    let result = payload
-        .get("result")
-        .ok_or_else(|| WlError::Protocol("audio status response missing result".to_owned()))?;
-    audio_status_from_result(result)
-}
-
-fn dispatch_audio_mute(
-    transport: &SeqpacketTransport,
-    vm: &str,
-    channel: AudioChannel,
-    mute: bool,
-) -> WlResult<DispatchOutcome> {
-    let value = request_value(
-        transport,
-        audio_frame(
-            "mute",
-            json_values([
-                ("vm", Value::String(vm.to_owned())),
-                (
-                    "channel",
-                    Value::String(audio_channel_wire(channel).to_owned()),
-                ),
-                ("mute", Value::Bool(mute)),
-            ]),
-        )?,
-    )?;
-    let result = audio_set_result(value, "mute")?;
-    Ok(DispatchOutcome {
-        summary: format!(
-            "audio {} {}: {}",
-            result.vm,
-            audio_channel_label(result.channel),
-            if result.state.muted {
-                "muted"
-            } else {
-                "unmuted"
-            }
-        ),
-    })
-}
-
-fn dispatch_audio_set_volume(
-    transport: &SeqpacketTransport,
-    vm: &str,
-    channel: AudioChannel,
-    level_percent: u8,
-) -> WlResult<DispatchOutcome> {
-    if level_percent > 100 {
-        return Err(WlError::Config(
-            "audio level must be between 0 and 100".to_owned(),
-        ));
-    }
-    let value = request_value(
-        transport,
-        audio_frame(
-            "setVolume",
-            json_values([
-                ("vm", Value::String(vm.to_owned())),
-                (
-                    "channel",
-                    Value::String(audio_channel_wire(channel).to_owned()),
-                ),
-                ("level", Value::from(level_percent)),
-            ]),
-        )?,
-    )?;
-    let result = audio_set_result(value, "setVolume")?;
-    let level = result
-        .state
-        .level
-        .unwrap_or_else(|| u16::from(level_percent));
-    Ok(DispatchOutcome {
-        summary: format!(
-            "audio {} {} level: {}%",
-            result.vm,
-            audio_channel_label(result.channel),
-            level
-        ),
-    })
-}
-
-fn dispatch_mutating(
-    transport: &SeqpacketTransport,
-    request_type: &str,
-    mut fields: Map<String, Value>,
-) -> WlResult<DispatchOutcome> {
-    fields.insert("dryRun".to_owned(), Value::Bool(false));
-    fields.insert("apply".to_owned(), Value::Bool(true));
-    fields.insert("json".to_owned(), Value::Bool(true));
-    let value = request_value(transport, frame(request_type, fields)?)?;
-    let payload = response_payload(value, "mutatingVerbResponse", "mutating verb", None)?;
-    let response: MutatingVerbResponse = serde_json::from_value(payload)?;
-    mutating_response_result(response)
-}
-
-fn mutating_response_result(response: MutatingVerbResponse) -> WlResult<DispatchOutcome> {
-    match response.outcome.as_str() {
-        "applied" => Ok(DispatchOutcome {
-            summary: response
-                .summary
-                .unwrap_or_else(|| format!("{} {}", response.verb, response.outcome)),
-        }),
-        "api-ready-timeout" => Err(WlError::Timeout(response.failure_message())),
-        "invalid-request" => Err(WlError::Protocol(response.failure_message())),
-        "dry-run-planned" | "not-yet-implemented" | "broker-error" => {
-            Err(WlError::D2b(response.failure_message()))
-        }
-        other => Err(WlError::Protocol(format!(
-            "unknown mutating verb outcome '{other}'"
-        ))),
-    }
-}
-
-fn mutating_response_error(response: MutatingVerbResponse) -> WlError {
-    match mutating_response_result(response) {
-        Ok(outcome) => WlError::Protocol(format!(
-            "unexpected applied mutating response to usbipProbe: {}",
-            outcome.summary
-        )),
-        Err(error) => error,
-    }
-}
-
-fn request_value(transport: &SeqpacketTransport, payload: Vec<u8>) -> WlResult<Value> {
-    transport.send_payload(&payload)?;
-    let response = transport.recv_payload()?;
-    let value: Value = serde_json::from_slice(&response)
-        .map_err(|err| WlError::Protocol(format!("invalid JSON from d2bd: {err}")))?;
-    reject_error_response(&value)?;
-    Ok(value)
-}
-
-fn request_workload_inventory(transport: &SeqpacketTransport) -> WlResult<WorkloadInventory> {
-    match request_workload_op(transport, WorkloadOp::List(WorkloadListArgs::inventory()))? {
-        WorkloadOpResponse::List(result) => Ok(WorkloadInventory {
-            workloads: result
-                .workloads
-                .into_iter()
-                .map(workload_from_toolkit)
-                .collect(),
-        }),
-        _ => Err(WlError::Protocol(
-            "d2bd returned the wrong public workload response".to_owned(),
-        )),
-    }
-}
-
-fn request_workload_status(
-    transport: &SeqpacketTransport,
-    target: WorkloadTarget,
-) -> WlResult<RealmLauncherEntry> {
-    let expected_target = target.clone();
-    match request_workload_op(transport, WorkloadOp::Status(WorkloadStatusArgs { target }))? {
-        WorkloadOpResponse::Status(result)
-            if result.workload.identity.canonical_target == expected_target =>
-        {
-            Ok(workload_from_toolkit(result.workload))
-        }
-        WorkloadOpResponse::Status(_) => Err(WlError::Protocol(
-            "d2bd workload status target did not match the request".to_owned(),
-        )),
-        _ => Err(WlError::Protocol(
-            "d2bd returned the wrong public workload response".to_owned(),
-        )),
-    }
-}
-
-fn request_launcher_exec(
-    transport: &SeqpacketTransport,
-    target: WorkloadTarget,
-    item_id: ProtocolToken,
-    operation_id: OperationId,
-) -> WlResult<DispatchOutcome> {
-    let expected_target = target.clone();
-    let expected_item_id = item_id.clone();
-    let expected_operation_id = operation_id.clone();
-    match request_workload_op(
-        transport,
-        WorkloadOp::LauncherExec(LauncherExecArgs {
-            target,
-            item_id,
-            operation_id,
-        }),
-    )? {
-        WorkloadOpResponse::LauncherExec(result)
-            if result.target == expected_target
-                && result.item_id == expected_item_id
-                && result.operation_id == expected_operation_id =>
-        {
+async fn dispatch_plan(
+    daemon: &DaemonClient,
+    plan: DispatchPlan<'_>,
+) -> Result<DispatchOutcome, ClientError> {
+    match plan {
+        DispatchPlan::Inspect(resource_id) => {
+            inspect_all(daemon, resource_id).await?;
             Ok(DispatchOutcome {
-                summary: format!(
-                    "configured launch {}",
-                    result.disposition.metrics_label_value()
-                ),
+                summary: "d2b state refreshed".to_owned(),
             })
         }
-        WorkloadOpResponse::LauncherExec(_) => Err(WlError::Protocol(
-            "d2bd configured launch response did not match the request".to_owned(),
-        )),
-        _ => Err(WlError::Protocol(
-            "d2bd returned the wrong public workload response".to_owned(),
-        )),
-    }
-}
-
-fn request_workload_op(
-    transport: &SeqpacketTransport,
-    op: WorkloadOp,
-) -> WlResult<WorkloadOpResponse> {
-    let request = PublicRequest::workload(None, op);
-    transport.send_payload(&serde_json::to_vec(&request)?)?;
-    let response: PublicResponse = serde_json::from_slice(&transport.recv_payload()?)
-        .map_err(|error| WlError::Protocol(format!("invalid workload JSON from d2bd: {error}")))?;
-    match response {
-        PublicResponse::Workload { response, .. } => Ok(response),
-        PublicResponse::Error { error, .. } => Err(WlError::D2b(format!(
-            "{}: {}; {}",
-            error.kind, error.message, error.remediation
-        ))),
-        PublicResponse::Shell { .. } => Err(WlError::Protocol(
-            "d2bd returned a shell response to a workload request".to_owned(),
-        )),
-    }
-}
-
-fn workload_from_toolkit(workload: ToolkitWorkloadPublicSummary) -> RealmLauncherEntry {
-    let launcher_items = workload
-        .launcher_items
-        .iter()
-        .map(|item| LauncherItemSummary {
-            id: item.id.as_str().to_owned(),
-            name: item.name.clone(),
-            icon: LauncherIcon {
-                id: item.icon.id().map(str::to_owned),
-                name: item.icon.name().map(str::to_owned),
-            },
-            kind: launcher_kind_from_toolkit(item.kind),
-            graphical: item.graphical,
-            capabilities: capability_tokens(&item.capabilities),
-        })
-        .collect::<Vec<_>>();
-    let presentation_item = workload
-        .default_item_id
-        .as_ref()
-        .and_then(|default| {
-            workload
-                .launcher_items
-                .iter()
-                .find(|item| item.id == *default)
-        })
-        .or_else(|| workload.launcher_items.first());
-    let workload_name = workload.identity.workload_id.as_str().to_owned();
-    let label = workload
-        .identity
-        .workload_name
-        .clone()
-        .unwrap_or_else(|| workload_name.clone());
-    let action_id = workload
-        .default_item_id
-        .as_ref()
-        .map(|item| item.as_str().to_owned())
-        .or_else(|| launcher_items.first().map(|item| item.id.clone()))
-        .unwrap_or_else(|| workload_name.clone());
-    let icon = presentation_item
-        .and_then(|item| item.icon.name().or_else(|| item.icon.id()))
-        .unwrap_or("apps")
-        .to_owned();
-
-    RealmLauncherEntry {
-        action_id,
-        workload_name,
-        label,
-        icon,
-        canonical_target: workload.identity.canonical_target.as_str().to_owned(),
-        legacy_vm_name: workload
-            .identity
-            .legacy_vm_name
-            .as_ref()
-            .map(|name| name.as_str().to_owned()),
-        has_icon_collision: false,
-        icon_siblings: Vec::new(),
-        realm_name: workload.identity.realm_id.as_str().to_owned(),
-        realm_id: workload.identity.realm_id.as_str().to_owned(),
-        provider_kind: provider_kind_from_toolkit(workload.provider_kind),
-        execution_posture: execution_posture_from_toolkit(&workload.execution_posture),
-        availability: availability_from_toolkit(workload.availability),
-        workload_state: workload_state_from_toolkit(workload.state),
-        capabilities: capability_tokens(&workload.capabilities),
-        launcher_items,
-        default_item_id: workload
-            .default_item_id
-            .as_ref()
-            .map(|item| item.as_str().to_owned()),
-    }
-}
-
-fn capability_tokens(capabilities: &ToolkitCapabilitySet) -> Vec<String> {
-    let mut tokens = capabilities
-        .iter()
-        .map(|capability| capability.code().to_owned())
-        .chain(
-            capabilities
-                .unknown_iter()
-                .map(|token| token.as_str().to_owned()),
-        )
-        .collect::<Vec<_>>();
-    tokens.sort();
-    tokens
-}
-
-fn provider_kind_from_toolkit(kind: ToolkitWorkloadProviderKind) -> WorkloadProviderKind {
-    match kind {
-        ToolkitWorkloadProviderKind::LocalVm => WorkloadProviderKind::LocalVm,
-        ToolkitWorkloadProviderKind::QemuMedia => WorkloadProviderKind::QemuMedia,
-        ToolkitWorkloadProviderKind::ProviderManaged => WorkloadProviderKind::ProviderManaged,
-        ToolkitWorkloadProviderKind::UnsafeLocal => WorkloadProviderKind::UnsafeLocal,
-    }
-}
-
-fn execution_posture_from_toolkit(
-    posture: &ToolkitWorkloadExecutionPosture,
-) -> WorkloadExecutionPosture {
-    WorkloadExecutionPosture {
-        isolation: match posture.isolation {
-            ToolkitIsolationPosture::VirtualMachine => IsolationPosture::VirtualMachine,
-            ToolkitIsolationPosture::ProviderManaged => IsolationPosture::ProviderManaged,
-            ToolkitIsolationPosture::UnsafeLocal => IsolationPosture::UnsafeLocal,
-        },
-        environment: match posture.environment {
-            ToolkitEnvironmentPosture::RuntimeManaged => EnvironmentPosture::RuntimeManaged,
-            ToolkitEnvironmentPosture::SystemdUserManagerAmbient => {
-                EnvironmentPosture::SystemdUserManagerAmbient
-            }
-        },
-        display_environment: match posture.display_environment {
-            ToolkitDisplayEnvironmentPosture::RuntimeManaged => {
-                DisplayEnvironmentPosture::RuntimeManaged
-            }
-            ToolkitDisplayEnvironmentPosture::WaylandProxyOnly => {
-                DisplayEnvironmentPosture::WaylandProxyOnly
-            }
-            ToolkitDisplayEnvironmentPosture::NotApplicable => {
-                DisplayEnvironmentPosture::NotApplicable
-            }
-        },
-        execution_identity: match posture.execution_identity {
-            ToolkitExecutionIdentityPosture::WorkloadUser => ExecutionIdentityPosture::WorkloadUser,
-            ToolkitExecutionIdentityPosture::ProviderManaged => {
-                ExecutionIdentityPosture::ProviderManaged
-            }
-            ToolkitExecutionIdentityPosture::AuthenticatedRequesterUid => {
-                ExecutionIdentityPosture::AuthenticatedRequesterUid
-            }
-        },
-        session_persistence: match posture.session_persistence {
-            ToolkitSessionPersistencePosture::RuntimeManaged => {
-                SessionPersistencePosture::RuntimeManaged
-            }
-            ToolkitSessionPersistencePosture::UserManagerLifetime => {
-                SessionPersistencePosture::UserManagerLifetime
-            }
-        },
-    }
-}
-
-fn availability_from_toolkit(availability: ToolkitWorkloadAvailability) -> WorkloadAvailability {
-    match availability {
-        ToolkitWorkloadAvailability::Ready => WorkloadAvailability::Ready,
-        ToolkitWorkloadAvailability::HelperUnavailable => WorkloadAvailability::HelperUnavailable,
-        ToolkitWorkloadAvailability::HelperStale => WorkloadAvailability::HelperStale,
-        ToolkitWorkloadAvailability::UserManagerUnavailable => {
-            WorkloadAvailability::UserManagerUnavailable
-        }
-        ToolkitWorkloadAvailability::GraphicalSessionInactive => {
-            WorkloadAvailability::GraphicalSessionInactive
-        }
-        ToolkitWorkloadAvailability::WaylandUnavailable => WorkloadAvailability::WaylandUnavailable,
-        ToolkitWorkloadAvailability::ProxyUnavailable => WorkloadAvailability::ProxyUnavailable,
-        ToolkitWorkloadAvailability::Degraded => WorkloadAvailability::Degraded,
-    }
-}
-
-fn workload_state_from_toolkit(state: ToolkitWorkloadState) -> WorkloadRuntimeState {
-    match state {
-        ToolkitWorkloadState::Stopped => WorkloadRuntimeState::Stopped,
-        ToolkitWorkloadState::Starting => WorkloadRuntimeState::Starting,
-        ToolkitWorkloadState::Running => WorkloadRuntimeState::Running,
-        ToolkitWorkloadState::Stopping => WorkloadRuntimeState::Stopping,
-        ToolkitWorkloadState::Failed => WorkloadRuntimeState::Failed,
-    }
-}
-
-fn launcher_kind_from_toolkit(kind: ToolkitLauncherItemKind) -> LauncherItemKind {
-    match kind {
-        ToolkitLauncherItemKind::Exec => LauncherItemKind::Exec,
-        ToolkitLauncherItemKind::Shell => LauncherItemKind::Shell,
-    }
-}
-
-fn hello_frame() -> WlResult<Vec<u8>> {
-    let payload = HelloFrame::new(Hello {
-        client_version: SemverRange::new(CLIENT_VERSION_RANGE),
-        supported_features: vec![
-            KnownFeatureFlag::TypedErrors.wire_value(),
-            KnownFeatureFlag::ExportBrokerAudit.wire_value(),
-            KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
-            KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
-            KnownFeatureFlag::UnsafeLocalShellV1.wire_value(),
-        ],
-    });
-    serde_json::to_vec(&payload).map_err(WlError::from)
-}
-
-fn frame_empty(type_name: &str) -> WlResult<Vec<u8>> {
-    frame(type_name, Map::new())
-}
-
-fn frame(type_name: &str, mut payload: Map<String, Value>) -> WlResult<Vec<u8>> {
-    payload.insert("type".to_owned(), Value::String(type_name.to_owned()));
-    serde_json::to_vec(&Value::Object(payload)).map_err(WlError::from)
-}
-
-fn audio_frame(op: &str, args: Map<String, Value>) -> WlResult<Vec<u8>> {
-    let mut payload = Map::new();
-    payload.insert("op".to_owned(), Value::String(op.to_owned()));
-    payload.insert("args".to_owned(), Value::Object(args));
-    frame("audio", payload)
-}
-
-fn json_object<const N: usize>(fields: [(&str, String); N]) -> Map<String, Value> {
-    fields
-        .into_iter()
-        .map(|(key, value)| (key.to_owned(), Value::String(value)))
-        .collect()
-}
-
-fn vm_stop_fields(vm: &str, force: bool) -> Map<String, Value> {
-    let mut fields = json_values([("vm", Value::String(vm.to_owned()))]);
-    if force {
-        fields.insert("force".to_owned(), Value::Bool(true));
-    }
-    fields
-}
-
-fn json_values<const N: usize>(fields: [(&str, Value); N]) -> Map<String, Value> {
-    fields
-        .into_iter()
-        .map(|(key, value)| (key.to_owned(), value))
-        .collect()
-}
-
-fn parse_hello_reply(bytes: &[u8]) -> WlResult<()> {
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|err| WlError::Protocol(format!("invalid hello JSON from d2bd: {err}")))?;
-    reject_error_response(&value)?;
-    if let Ok(response) = serde_json::from_value::<HelloResponse>(value.clone()) {
-        return validate_toolkit_hello_response(response);
-    }
-    let type_name = value.get("type").and_then(Value::as_str);
-    if type_name == Some("helloRejected") {
-        let reason = value
-            .get("reason")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        if let Some(error) = value.get("error").and_then(parse_daemon_error) {
-            return Err(error.into_wl_error());
-        }
-        return Err(match reason {
-            "versionMismatch" => WlError::Protocol("d2bd rejected client version".to_owned()),
-            "capabilityNegotiationFailed" => {
-                WlError::Protocol("d2bd rejected client capabilities".to_owned())
-            }
-            _ => WlError::D2b(format!("d2bd rejected hello: {reason}")),
-        });
-    }
-
-    let hello_ok = type_name == Some("helloOk")
-        || (type_name.is_none()
-            && value.get("serverVersion").is_some()
-            && value.get("selectedVersion").is_some());
-    if !hello_ok {
-        return Err(WlError::Protocol(
-            "unexpected d2bd hello response".to_owned(),
-        ));
-    }
-    let selected = value
-        .get("selectedVersion")
-        .and_then(Value::as_str)
-        .ok_or_else(|| WlError::Protocol("helloOk missing selectedVersion".to_owned()))?;
-    selected_version_supported(selected).map_err(|reason| {
-        WlError::Protocol(format!(
-            "d2bd selected unsupported protocol version {selected}: {reason}"
-        ))
-    })
-}
-
-fn validate_toolkit_hello_response(response: HelloResponse) -> WlResult<()> {
-    match response {
-        HelloResponse::HelloOk(HelloOk {
-            selected_version, ..
-        }) => selected_version_supported(selected_version.as_str()).map_err(|reason| {
-            WlError::Protocol(format!(
-                "d2bd selected unsupported protocol version {}: {reason}",
-                selected_version.as_str()
-            ))
-        }),
-        HelloResponse::HelloRejected(HelloRejected { reason, error }) => match reason {
-            HelloRejectedReason::VersionMismatch => {
-                Err(WlError::Protocol("d2bd rejected client version".to_owned()))
-            }
-            HelloRejectedReason::CapabilityNegotiationFailed => Err(WlError::Protocol(
-                "d2bd rejected client capabilities".to_owned(),
-            )),
-            HelloRejectedReason::InternalError => Err(DaemonError {
-                kind: error.kind,
-                exit_code: Some(error.exit_code),
-                message: error.message,
-                remediation: Some(error.remediation),
-            }
-            .into_wl_error()),
-        },
-    }
-}
-
-fn selected_version_supported(version: &str) -> Result<(), String> {
-    let version = parse_stable_semver(version)?;
-    if ((0, 4, 0)..(0, 5, 0)).contains(&version) {
-        Ok(())
-    } else {
-        Err("outside client range >=0.4.0, <0.5.0".to_owned())
-    }
-}
-
-fn parse_stable_semver(version: &str) -> Result<(u64, u64, u64), String> {
-    let (core, build) = version.split_once('+').unwrap_or((version, ""));
-    if let Some(build) = version.split_once('+').map(|(_, build)| build) {
-        validate_semver_identifiers(build, "build metadata")?;
-    }
-    if core.contains('-') {
-        return Err("pre-release versions are not accepted".to_owned());
-    }
-    let mut parts = core.split('.');
-    let major = parse_numeric_identifier(parts.next(), "major")?;
-    let minor = parse_numeric_identifier(parts.next(), "minor")?;
-    let patch = parse_numeric_identifier(parts.next(), "patch")?;
-    if parts.next().is_some() {
-        return Err("expected exactly major.minor.patch".to_owned());
-    }
-    if build.is_empty() && version.contains('+') {
-        return Err("build metadata must not be empty".to_owned());
-    }
-    Ok((major, minor, patch))
-}
-
-fn parse_numeric_identifier(part: Option<&str>, name: &str) -> Result<u64, String> {
-    let part = part.ok_or_else(|| format!("missing {name} version component"))?;
-    if part.is_empty() {
-        return Err(format!("{name} version component is empty"));
-    }
-    if part.len() > 1 && part.starts_with('0') {
-        return Err(format!("{name} version component has a leading zero"));
-    }
-    if !part.bytes().all(|byte| byte.is_ascii_digit()) {
-        return Err(format!("{name} version component is not numeric"));
-    }
-    part.parse::<u64>()
-        .map_err(|err| format!("{name} version component is invalid: {err}"))
-}
-
-fn validate_semver_identifiers(value: &str, label: &str) -> Result<(), String> {
-    if value.is_empty() {
-        return Err(format!("{label} must not be empty"));
-    }
-    for identifier in value.split('.') {
-        if identifier.is_empty() {
-            return Err(format!("{label} contains an empty identifier"));
-        }
-        if !identifier
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return Err(format!("{label} contains an invalid identifier"));
+        DispatchPlan::Lifecycle {
+            method,
+            desired_state,
+            resource_id,
+            operation,
+        } => {
+            let operation_id = operation_id(operation);
+            let request_digest =
+                lifecycle_digest(operation, resource_id, desired_state, &operation_id);
+            daemon
+                .lifecycle(
+                    DaemonLifecycleRequest {
+                        method,
+                        resource_id,
+                        desired_state,
+                        operation_id: &operation_id,
+                        request_digest,
+                    },
+                    daemon_call_options(true)?,
+                    &CancellationToken::default(),
+                )
+                .await?;
+            Ok(DispatchOutcome {
+                summary: format!("{operation} accepted for {resource_id}"),
+            })
         }
     }
-    Ok(())
 }
 
-fn response_payload(
-    value: Value,
-    expected_type: &str,
-    expected_kind: &str,
-    wrapper_field: Option<&str>,
-) -> WlResult<Value> {
-    reject_error_response(&value)?;
-    if let Some(type_name) = value.get("type").and_then(Value::as_str) {
-        if type_name != expected_type {
-            return Err(WlError::Protocol(format!(
-                "expected {expected_type}, got {type_name}"
-            )));
-        }
-        if let Some(field) = wrapper_field {
-            return value
-                .get(field)
-                .cloned()
-                .ok_or_else(|| WlError::Protocol(format!("{expected_type} missing {field}")));
-        }
-        let mut object = value
-            .as_object()
-            .cloned()
-            .ok_or_else(|| WlError::Protocol(format!("{expected_type} must be an object")))?;
-        object.remove("type");
-        return Ok(Value::Object(object));
-    }
-
-    if let Some(kind) = value.get("kind").and_then(Value::as_str) {
-        if kind != expected_kind {
-            return Err(WlError::Protocol(format!(
-                "expected response kind '{expected_kind}', got '{kind}'"
-            )));
-        }
-        return Ok(value.get("payload").cloned().unwrap_or(Value::Null));
-    }
-
-    Ok(value)
+fn client_runtime() -> WlResult<Runtime> {
+    Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .map_err(|_| WlError::D2b("failed to start canonical client runtime".to_owned()))
 }
 
-fn reject_error_response(value: &Value) -> WlResult<()> {
-    if value.get("type").and_then(Value::as_str) == Some("error") {
-        let error = value
-            .get("error")
-            .and_then(parse_daemon_error)
-            .unwrap_or_else(|| DaemonError::new("error", "d2bd returned an error"));
-        return Err(error.into_wl_error());
-    }
-    if value.get("kind").and_then(Value::as_str) == Some("error") {
-        let error_value = value.get("payload").unwrap_or(value);
-        let error = parse_daemon_error(error_value)
-            .unwrap_or_else(|| DaemonError::new("error", "d2bd returned an error"));
-        return Err(error.into_wl_error());
-    }
-    Ok(())
-}
-
-fn parse_daemon_error(value: &Value) -> Option<DaemonError> {
-    serde_json::from_value(value.clone()).ok()
-}
-
-fn reject_privileged_broker_socket(socket_path: &str) -> WlResult<()> {
-    let trimmed = socket_path.trim_end_matches('/');
-    let class = if trimmed == "/run/d2b/public.sock" {
-        SocketClass::PublicDaemon
-    } else if trimmed == "/run/d2b/priv.sock"
-        || Path::new(trimmed)
-            .file_name()
-            .and_then(|name| name.to_str())
-            == Some("priv.sock")
-    {
-        SocketClass::PrivilegedBroker
-    } else {
-        SocketClass::Other
-    };
-    if ensure_allowed_socket(class).is_err() {
-        return Err(WlError::Config(format!(
-            "refusing to connect wlcontrol to privileged d2b broker socket {socket_path}; configure the public socket instead"
-        )));
-    }
-    Ok(())
-}
-
-fn inventory_vm_from_value(value: &Value) -> Option<InventoryVm> {
-    let name = string_field(value, &["name", "vm"])?;
-    Some(InventoryVm {
-        name,
-        canonical_target: canonical_target_from_value(value),
-        env: string_field(value, &["env"]),
-        is_net_vm: bool_field(value, &["isNetVm", "is_net_vm"]).unwrap_or(false),
-        features: features_from_value(value),
-        capabilities: capabilities_from_value(value),
-        static_ip: None,
-        coarse_status: nested_string_field(value, &["lifecycle"], &["state"])
-            .or_else(|| runtime_text(value.get("runtime"))),
-    })
-}
-
-fn features_from_value(value: &Value) -> VmFeatures {
-    let mut features = VmFeatures::default();
-    for parent in ["features", "components", "capabilities", "manifest"] {
-        if let Some(source) = value.get(parent) {
-            apply_features(&mut features, source);
-        }
-    }
-    apply_features(&mut features, value);
-    features
-}
-
-fn apply_features(features: &mut VmFeatures, value: &Value) {
-    if let Some(v) = bool_field(value, &["graphics"]) {
-        features.graphics = v;
-    }
-    if let Some(v) = bool_field(value, &["tpm"]) {
-        features.tpm = v;
-    }
-    if let Some(v) = bool_field(value, &["usbip", "usbIp", "usb"]) {
-        features.usbip = v;
-    }
-    if let Some(v) = bool_field(value, &["audio"]) {
-        features.audio = v;
-    }
-}
-
-#[derive(Debug, Clone)]
-struct StatusSnapshot {
-    status: VmStatus,
-    static_ip: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct StatusModelSnapshot {
-    inventory: Inventory,
-    statuses: Vec<VmStatus>,
-    usb: UsbProbe,
-}
-
-fn status_model_from_payload(payload: &Value) -> Option<StatusModelSnapshot> {
-    let entries = status_entries(payload)?;
-    let mut inventory = Vec::with_capacity(entries.len());
-    let mut statuses = Vec::with_capacity(entries.len());
-    let mut claims = Vec::new();
-
-    for entry in entries {
-        let snapshot = status_snapshot_from_entry(entry, None)?;
-        let mut vm = inventory_vm_from_value(entry)?;
-        vm.static_ip = snapshot.static_ip.clone();
-        for claim in usb_claims_from_status_entry(entry) {
-            claims.push(claim);
-        }
-        inventory.push(vm);
-        statuses.push(snapshot.status);
-    }
-
-    Some(StatusModelSnapshot {
-        inventory: Inventory { vms: inventory },
-        statuses,
-        usb: UsbProbe { claims },
-    })
-}
-
-fn status_entries(payload: &Value) -> Option<Vec<&Value>> {
-    if let Some(entries) = payload.get("vms").and_then(Value::as_array) {
-        return Some(entries.iter().collect());
-    }
-    if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
-        return Some(entries.iter().collect());
-    }
-    if let Some(status) = payload.get("status") {
-        if let Some(entries) = status.get("vms").and_then(Value::as_array) {
-            return Some(entries.iter().collect());
-        }
-        if let Some(entries) = status.get("entries").and_then(Value::as_array) {
-            return Some(entries.iter().collect());
-        }
-    }
-    None
-}
-
-fn status_snapshot_from_payload(payload: &Value, requested_vm: &str) -> Option<StatusSnapshot> {
-    let candidate = status_candidate(payload, requested_vm)?;
-    status_snapshot_from_entry(candidate, Some(requested_vm))
-}
-
-fn status_snapshot_from_entry(
-    candidate: &Value,
-    fallback_name: Option<&str>,
-) -> Option<StatusSnapshot> {
-    let name =
-        string_field(candidate, &["name", "vm"]).or_else(|| fallback_name.map(str::to_owned))?;
-    let pending_restart = candidate
-        .get("lifecycle")
-        .and_then(|lifecycle| bool_field(lifecycle, &["pendingRestart"]))
-        .or_else(|| bool_field(candidate, &["pendingRestart", "pending_restart"]))
-        .unwrap_or(false);
-    let readiness = candidate
-        .get("readiness")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    let state = state_from_status(candidate);
-    let static_ip = string_field(candidate, &["staticIp", "static_ip"]);
-    let canonical_target = canonical_target_from_value(candidate);
-
-    Some(StatusSnapshot {
-        status: VmStatus {
-            name,
-            canonical_target,
-            state,
-            pending_restart,
-            readiness,
-            capabilities: capabilities_from_value(candidate),
-        },
-        static_ip,
-    })
-}
-
-fn canonical_target_from_value(value: &Value) -> Option<String> {
-    string_field(
-        value,
-        &[
-            "canonicalTarget",
-            "canonical_target",
-            "realmTarget",
-            "realm_target",
-            "target",
-        ],
+async fn connect_daemon(socket_path: &str) -> Result<DaemonClient, ClientError> {
+    let path = PathBuf::from(socket_path);
+    let (fd, client_uid, client_gid, daemon_uid) =
+        tokio::task::spawn_blocking(move || connect_seqpacket(&path))
+            .await
+            .map_err(|_| ClientError::ConnectFailed)??;
+    let identity = local_daemon_endpoint_identity(client_uid, client_gid)?;
+    let connector =
+        HostSocketConnector::from_seqpacket_fd(fd, daemon_uid, identity, HandshakeCredentials::Nn)?;
+    let realm_path = RealmPath::parse("local-root").map_err(|_| ClientError::InvalidTarget)?;
+    let realm = RealmId::derive(&realm_path);
+    let connected = Client::new(
+        RouteTable::new(vec![RouteRecord {
+            owner: ServiceOwner::LocalRoot(realm.clone()),
+            transport: TransportKind::LocalUnix,
+        }]),
+        connector,
     )
-    .or_else(|| {
-        value.get("identity").and_then(|identity| {
-            string_field(
-                identity,
-                &[
-                    "canonicalTarget",
-                    "canonical_target",
-                    "realmTarget",
-                    "realm_target",
-                ],
-            )
-        })
-    })
-    .or_else(|| {
-        value.get("realm").and_then(|realm| {
-            let workload = string_field(value, &["name", "vm", "workload", "workloadId"])?;
-            let realm_path = string_field(realm, &["path", "targetForm", "target_form", "name"])?;
-            Some(format!("{workload}.{realm_path}.d2b"))
-        })
-    })
+    .connect(
+        TargetInput::LocalRoot(realm),
+        ServiceKind::Daemon,
+        TransportSelection::exact(TransportKind::LocalUnix),
+    )
+    .await?;
+    DaemonClient::new(connected)
 }
 
-fn usb_claims_from_status_entry(entry: &Value) -> Vec<UsbClaim> {
-    entry
-        .get("usb")
-        .and_then(|usb| usb.get("entries").or(Some(usb)))
-        .and_then(Value::as_array)
-        .map(|entries| entries.iter().filter_map(usb_claim_from_value).collect())
+fn connect_seqpacket(path: &Path) -> Result<(OwnedFd, u32, u32, u32), ClientError> {
+    let fd = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+        None,
+    )
+    .map_err(|_| ClientError::ConnectFailed)?;
+    let address = UnixAddr::new(path).map_err(|_| ClientError::ConnectFailed)?;
+    connect_nonblocking(&fd, &address)?;
+    let daemon_uid = User::from_name("d2bd")
+        .map_err(|_| ClientError::ConnectFailed)?
+        .ok_or(ClientError::ConnectFailed)?
+        .uid
+        .as_raw();
+    Ok((
+        fd,
+        Uid::effective().as_raw(),
+        Gid::effective().as_raw(),
+        daemon_uid,
+    ))
+}
+
+/// Drives a nonblocking `connect(2)` on `fd` to completion.
+///
+/// The fd is created with `SOCK_NONBLOCK` (it is later handed to the async
+/// runtime, so it must stay nonblocking), which means `connect(2)` on an
+/// `AF_UNIX SOCK_SEQPACKET` socket can legitimately return:
+///
+/// - `EINPROGRESS`: the connect is in flight; poll for writability, then
+///   resolve the real outcome via `SO_ERROR`.
+/// - `EAGAIN` (Linux-specific for `AF_UNIX`): the listener's backlog is
+///   momentarily full; retry the `connect(2)` call itself after a short,
+///   bounded delay.
+/// - `EINTR`: retry immediately.
+///
+/// Any other error, or exhausting the bounded retry/poll budget, is
+/// reported as `ClientError::ConnectFailed` rather than treated as fatal
+/// on the first syscall return.
+fn connect_nonblocking(fd: &OwnedFd, address: &UnixAddr) -> Result<(), ClientError> {
+    for attempt in 0..CONNECT_RETRY_ATTEMPTS {
+        match connect(fd.as_raw_fd(), address) {
+            Ok(()) => return Ok(()),
+            Err(Errno::EINPROGRESS) => return wait_for_connect(fd),
+            Err(Errno::EINTR) => continue,
+            Err(Errno::EAGAIN) => {
+                if attempt + 1 == CONNECT_RETRY_ATTEMPTS {
+                    return Err(ClientError::ConnectFailed);
+                }
+                std::thread::sleep(CONNECT_RETRY_DELAY);
+            }
+            Err(_) => return Err(ClientError::ConnectFailed),
+        }
+    }
+    Err(ClientError::ConnectFailed)
+}
+
+/// Polls a connect-in-progress fd for writability and resolves the
+/// outcome via `SO_ERROR`, within a bounded number of poll attempts.
+fn wait_for_connect(fd: &OwnedFd) -> Result<(), ClientError> {
+    let mut fds = [PollFd::new(fd.as_fd(), PollFlags::POLLOUT)];
+    for _ in 0..CONNECT_POLL_ATTEMPTS {
+        match poll(&mut fds, PollTimeout::from(CONNECT_POLL_TIMEOUT_MS)) {
+            Ok(0) => continue,
+            Ok(_) => {
+                let err =
+                    getsockopt(fd, sockopt::SocketError).map_err(|_| ClientError::ConnectFailed)?;
+                return if err == 0 {
+                    Ok(())
+                } else {
+                    Err(ClientError::ConnectFailed)
+                };
+            }
+            Err(Errno::EINTR) => continue,
+            Err(_) => return Err(ClientError::ConnectFailed),
+        }
+    }
+    Err(ClientError::ConnectFailed)
+}
+
+async fn inspect_all(
+    daemon: &DaemonClient,
+    resource_id: Option<&str>,
+) -> Result<Vec<daemon::WorkloadProjection>, ClientError> {
+    let cancellation = CancellationToken::default();
+    let mut cursor = None;
+    let mut seen = BTreeSet::new();
+    let mut read_model = None;
+    let mut projections = Vec::new();
+    for _ in 0..MAX_PAGES {
+        let response = daemon
+            .inspect(
+                resource_id,
+                MAX_PAGE_SIZE,
+                cursor.as_deref(),
+                daemon_call_options(false)?,
+                &cancellation,
+            )
+            .await?;
+        if read_model
+            .as_ref()
+            .is_some_and(|current| current != &response.read_model)
+        {
+            return Err(ClientError::ContractViolation);
+        }
+        read_model.get_or_insert(response.read_model);
+        let page = response
+            .page
+            .into_option()
+            .ok_or(ClientError::ContractViolation)?;
+        projections.extend(response.workloads);
+        if !page.truncated {
+            return Ok(projections);
+        }
+        if page.next_page_cursor.is_empty() || !seen.insert(page.next_page_cursor.clone()) {
+            return Err(ClientError::ContractViolation);
+        }
+        cursor = Some(page.next_page_cursor);
+    }
+    Err(ClientError::ContractViolation)
+}
+
+fn reduce_input(projections: Vec<daemon::WorkloadProjection>) -> ReduceInput {
+    let local_vms = projections
+        .into_iter()
+        .filter(is_vm_projection)
+        .collect::<Vec<_>>();
+    let inventory = Inventory {
+        vms: local_vms.iter().map(inventory_vm).collect(),
+    };
+    let statuses = local_vms.iter().map(vm_status).collect();
+    ReduceInput {
+        connectivity: Connectivity::Connected,
+        // A successfully negotiated local daemon session proves at least the
+        // frozen launcher read authority. It does not prove admin authority.
+        auth: Some(Auth {
+            role: AuthRole::Launcher,
+        }),
+        inventory: Some(inventory),
+        statuses,
+        ..Default::default()
+    }
+}
+
+fn is_vm_projection(workload: &daemon::WorkloadProjection) -> bool {
+    matches!(
+        workload
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.kind.enum_value_or_default()),
+        Some(
+            daemon::RuntimeKind::RUNTIME_KIND_NIXOS | daemon::RuntimeKind::RUNTIME_KIND_QEMU_MEDIA
+        )
+    )
+}
+
+fn inventory_vm(workload: &daemon::WorkloadProjection) -> InventoryVm {
+    let identity = workload.identity.as_ref();
+    let name = projection_name(workload);
+    let supported = supported_capabilities(workload);
+    let runtime_kind = workload
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.kind.enum_value_or_default());
+    InventoryVm {
+        name,
+        canonical_target: nonempty(identity.map(|value| value.canonical_target.as_str())),
+        env: nonempty(Some(workload.environment.as_str())),
+        is_net_vm: workload.is_net_workload,
+        features: VmFeatures {
+            graphics: workload.graphics,
+            tpm: workload.tpm,
+            usbip: workload.usbip,
+            audio: workload.services.iter().any(|service| {
+                service.kind.enum_value_or_default() == daemon::ServiceKind::SERVICE_KIND_AUDIO
+            }),
+        },
+        capabilities: capabilities(&supported, runtime_kind),
+        static_ip: ip_address(&workload.static_ip),
+        coarse_status: Some(runtime_state_name(runtime_state(workload)).to_owned()),
+    }
+}
+
+fn vm_status(workload: &daemon::WorkloadProjection) -> VmStatus {
+    let identity = workload.identity.as_ref();
+    let supported = supported_capabilities(workload);
+    let runtime_kind = workload
+        .runtime
+        .as_ref()
+        .map(|runtime| runtime.kind.enum_value_or_default());
+    let lifecycle = workload.lifecycle.as_ref();
+    let mut readiness = lifecycle
+        .into_iter()
+        .flat_map(|value| &value.degraded_reasons)
+        .map(|reason| {
+            if reason.remediation.is_empty() {
+                reason.reason.clone()
+            } else {
+                format!("{}: {}", reason.reason, reason.remediation)
+            }
+        })
+        .collect::<Vec<_>>();
+    readiness.extend(workload.readiness.iter().map(|item| {
+        format!(
+            "{}:{}",
+            item.predicate_id,
+            service_state_name(item.state.enum_value_or_default())
+        )
+    }));
+    VmStatus {
+        name: projection_name(workload),
+        canonical_target: nonempty(identity.map(|value| value.canonical_target.as_str())),
+        state: runtime_state(workload),
+        pending_restart: lifecycle.is_some_and(|value| value.pending_restart),
+        readiness,
+        capabilities: capabilities(&supported, runtime_kind),
+    }
+}
+
+fn projection_name(workload: &daemon::WorkloadProjection) -> String {
+    if !workload.name.is_empty() {
+        return workload.name.clone();
+    }
+    workload
+        .identity
+        .as_ref()
+        .map(|identity| identity.workload_name.clone())
         .unwrap_or_default()
 }
 
-fn status_candidate<'a>(payload: &'a Value, requested_vm: &str) -> Option<&'a Value> {
-    if let Some(entries) = payload.get("entries").and_then(Value::as_array) {
-        entries
-            .iter()
-            .find(|entry| string_field(entry, &["name", "vm"]).as_deref() == Some(requested_vm))
-            .or_else(|| entries.first())
-    } else if let Some(vm) = payload.get("vm").filter(|vm| vm.is_object()) {
-        Some(vm)
-    } else {
-        Some(payload)
+fn supported_capabilities(workload: &daemon::WorkloadProjection) -> Vec<daemon::RuntimeCapability> {
+    workload
+        .runtime
+        .as_ref()
+        .into_iter()
+        .flat_map(|runtime| &runtime.supported_capabilities)
+        .map(|capability| capability.enum_value_or_default())
+        .collect()
+}
+
+fn capabilities(
+    supported: &[daemon::RuntimeCapability],
+    runtime_kind: Option<daemon::RuntimeKind>,
+) -> VmCapabilities {
+    let has = |capability| supported.contains(&capability);
+    let lifecycle = has(daemon::RuntimeCapability::RUNTIME_CAPABILITY_LIFECYCLE);
+    VmCapabilities {
+        start: lifecycle,
+        stop: lifecycle,
+        restart: lifecycle,
+        switch: false,
+        build: runtime_kind == Some(daemon::RuntimeKind::RUNTIME_KIND_NIXOS),
+        boot: false,
+        usb_hotplug: false,
+        store_verify: false,
+        terminal: has(daemon::RuntimeCapability::RUNTIME_CAPABILITY_EXEC)
+            || has(daemon::RuntimeCapability::RUNTIME_CAPABILITY_GUEST_CONTROL),
     }
 }
 
-fn state_from_status(value: &Value) -> RuntimeState {
-    if let Some(state) = nested_string_field(value, &["lifecycle"], &["state"]) {
-        return lifecycle_state(&state);
-    }
-    if let Some(api_ready) = value.get("apiReady").or_else(|| value.get("api_ready")) {
-        if let Some(state) = api_ready_state(api_ready) {
-            return state;
+fn runtime_state(workload: &daemon::WorkloadProjection) -> RuntimeState {
+    match workload
+        .lifecycle
+        .as_ref()
+        .map(|lifecycle| lifecycle.state.enum_value_or_default())
+    {
+        Some(daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RUNNING) => {
+            RuntimeState::Running
         }
-    }
-    if let Some(services) = value.get("services") {
-        if let Some(microvm) = string_field(services, &["microvm", "ch", "cloudHypervisor"]) {
-            return service_state(
-                &microvm,
-                value.get("apiReady").or_else(|| value.get("api_ready")),
-            );
+        Some(
+            daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STARTING
+            | daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_BOOTED
+            | daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RESTARTING,
+        ) => RuntimeState::Starting,
+        Some(daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STOPPING) => {
+            RuntimeState::Stopping
         }
-    }
-    runtime_text(value.get("runtime"))
-        .map(|text| text_state(&text))
-        .unwrap_or(RuntimeState::Unknown)
-}
-
-fn lifecycle_state(state: &str) -> RuntimeState {
-    match state {
-        "Booted" | "booted" | "Running" | "running" => RuntimeState::Running,
-        "Starting" | "starting" => RuntimeState::Starting,
-        "Restarting" | "restarting" | "Stopping" | "stopping" => RuntimeState::Stopping,
-        "Stopped" | "stopped" => RuntimeState::Stopped,
+        Some(daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_STOPPED) => {
+            RuntimeState::Stopped
+        }
         _ => RuntimeState::Unknown,
     }
 }
 
-fn service_state(microvm: &str, api_ready: Option<&Value>) -> RuntimeState {
-    let state = text_state(microvm);
-    if state == RuntimeState::Running {
-        match api_ready.and_then(api_ready_state) {
-            Some(RuntimeState::Starting) => RuntimeState::Starting,
-            Some(RuntimeState::Unknown) => RuntimeState::Unknown,
-            _ => RuntimeState::Running,
-        }
-    } else {
-        state
+fn runtime_state_name(state: RuntimeState) -> &'static str {
+    match state {
+        RuntimeState::Running => "running",
+        RuntimeState::Starting => "starting",
+        RuntimeState::Stopping => "stopping",
+        RuntimeState::Stopped => "stopped",
+        RuntimeState::Unknown => "unknown",
     }
 }
 
-fn api_ready_state(value: &Value) -> Option<RuntimeState> {
-    let text = if let Some(s) = value.as_str() {
-        Some(s.to_owned())
-    } else {
-        value
-            .get("error")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    }?;
-    match text.as_str() {
-        "yes" | "Yes" | "ready" | "Ready" => Some(RuntimeState::Running),
-        "pending" | "Pending" => Some(RuntimeState::Starting),
-        "timeout" | "Timeout" => Some(RuntimeState::Unknown),
+fn service_state_name(state: daemon::ServiceState) -> &'static str {
+    match state {
+        daemon::ServiceState::SERVICE_STATE_ACTIVE => "active",
+        daemon::ServiceState::SERVICE_STATE_INACTIVE => "inactive",
+        daemon::ServiceState::SERVICE_STATE_STARTING => "starting",
+        daemon::ServiceState::SERVICE_STATE_STOPPING => "stopping",
+        daemon::ServiceState::SERVICE_STATE_FAILED => "failed",
+        daemon::ServiceState::SERVICE_STATE_UNAVAILABLE => "unavailable",
+        daemon::ServiceState::SERVICE_STATE_UNSUPPORTED => "unsupported",
+        daemon::ServiceState::SERVICE_STATE_UNKNOWN
+        | daemon::ServiceState::SERVICE_STATE_UNSPECIFIED => "unknown",
+    }
+}
+
+fn nonempty(value: Option<&str>) -> Option<String> {
+    value.filter(|value| !value.is_empty()).map(str::to_owned)
+}
+
+fn ip_address(bytes: &[u8]) -> Option<String> {
+    match bytes {
+        [a, b, c, d] => Some(IpAddr::V4(Ipv4Addr::new(*a, *b, *c, *d)).to_string()),
+        bytes if bytes.len() == 16 => {
+            let octets: [u8; 16] = bytes.try_into().ok()?;
+            Some(IpAddr::V6(Ipv6Addr::from(octets)).to_string())
+        }
         _ => None,
     }
 }
 
-fn text_state(text: &str) -> RuntimeState {
-    let lower = text.to_ascii_lowercase();
-    if lower.starts_with("running") {
-        RuntimeState::Running
-    } else if lower.starts_with("starting")
-        || lower.starts_with("booted")
-        || lower.starts_with("restarting")
-        || lower.contains("pending")
-    {
-        RuntimeState::Starting
-    } else if lower.starts_with("stopping") {
-        RuntimeState::Stopping
-    } else if lower.starts_with("stopped") {
-        RuntimeState::Stopped
-    } else {
-        RuntimeState::Unknown
-    }
+fn operation_id(operation: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_nanos();
+    format!("wlcontrol-{operation}-{}-{nanos}", std::process::id())
 }
 
-fn usb_claim_from_value(value: &Value) -> Option<UsbClaim> {
-    let status = string_field(value, &["status"]).unwrap_or_default();
-    Some(UsbClaim {
-        vm: string_field(value, &["vm"])?,
-        env: string_field(value, &["env"])?,
-        bus_id: string_field(value, &["busId", "bus_id"])?,
-        bound: bool_field(value, &["bound"]).unwrap_or_else(|| status == "bound"),
-        owner_vm: string_field(value, &["ownerVm", "owner_vm"]),
-    })
+fn lifecycle_digest(
+    operation: &str,
+    resource_id: &str,
+    desired_state: common::DesiredState,
+    operation_id: &str,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"d2b-wlcontrol-lifecycle-v2\0");
+    digest.update(operation.as_bytes());
+    digest.update(resource_id.as_bytes());
+    digest.update((desired_state as i32).to_be_bytes());
+    digest.update(operation_id.as_bytes());
+    digest.finalize().into()
 }
 
-#[derive(Debug)]
-struct AudioSetWireResult {
-    vm: String,
-    channel: AudioChannel,
-    state: AudioChannelState,
-}
-
-fn audio_status_from_result(value: &Value) -> WlResult<AudioStatus> {
-    let entries = value
-        .get("entries")
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| audio_status_entry_from_value(entry).ok())
-                .collect()
-        })
-        .unwrap_or_default();
-    let errors = value
-        .get("errors")
-        .and_then(Value::as_array)
-        .map(|errors| {
-            errors
-                .iter()
-                .filter_map(|error| audio_status_error_from_value(error).ok())
-                .collect()
-        })
-        .unwrap_or_default();
-    Ok(AudioStatus { entries, errors })
-}
-
-fn audio_status_entry_from_value(value: &Value) -> WlResult<AudioStatusEntry> {
-    let vm = string_field(value, &["vm"])
-        .ok_or_else(|| WlError::Protocol("audio entry missing vm".to_owned()))?;
-    let speaker = audio_channel_state_from_value(
-        value
-            .get("speaker")
-            .ok_or_else(|| WlError::Protocol("audio entry missing speaker".to_owned()))?,
-    )?;
-    let microphone = audio_channel_state_from_value(
-        value
-            .get("microphone")
-            .ok_or_else(|| WlError::Protocol("audio entry missing microphone".to_owned()))?,
-    )?;
-    let provider_kind = parse_audio_provider(
-        string_field(value, &["providerKind", "provider_kind"])
-            .as_deref()
-            .ok_or_else(|| WlError::Protocol("audio entry missing providerKind".to_owned()))?,
-    )?;
-    let enforcement = parse_audio_enforcement(
-        string_field(value, &["enforcement"])
-            .as_deref()
-            .ok_or_else(|| WlError::Protocol("audio entry missing enforcement".to_owned()))?,
-    )?;
-    Ok(AudioStatusEntry {
-        vm,
-        audio: VmAudioState {
-            speaker,
-            microphone,
-            provider_kind,
-            enforcement,
-            error_kind: None,
-            remediation: None,
-        },
-    })
-}
-
-fn audio_status_error_from_value(value: &Value) -> WlResult<AudioStatusError> {
-    Ok(AudioStatusError {
-        vm: string_field(value, &["vm"])
-            .ok_or_else(|| WlError::Protocol("audio error missing vm".to_owned()))?,
-        kind: string_field(value, &["kind"])
-            .ok_or_else(|| WlError::Protocol("audio error missing kind".to_owned()))?,
-        remediation: string_field(value, &["remediation"]),
-    })
-}
-
-fn audio_set_result(value: Value, expected_op: &str) -> WlResult<AudioSetWireResult> {
-    let payload = response_payload(value, "audioOpResponse", "audio", None)?;
-    let op = payload
-        .get("op")
-        .and_then(Value::as_str)
-        .ok_or_else(|| WlError::Protocol("audio response missing op".to_owned()))?;
-    if op != expected_op {
-        return Err(WlError::Protocol(format!(
-            "expected audio op {expected_op}, got {op}"
-        )));
-    }
-    let result = payload
-        .get("result")
-        .ok_or_else(|| WlError::Protocol("audio response missing result".to_owned()))?;
-    let channel = parse_audio_channel(
-        string_field(result, &["channel"])
-            .as_deref()
-            .ok_or_else(|| WlError::Protocol("audio result missing channel".to_owned()))?,
-    )?;
-    Ok(AudioSetWireResult {
-        vm: string_field(result, &["vm"])
-            .ok_or_else(|| WlError::Protocol("audio result missing vm".to_owned()))?,
-        channel,
-        state: audio_channel_state_from_value(
-            result
-                .get("state")
-                .ok_or_else(|| WlError::Protocol("audio result missing state".to_owned()))?,
-        )?,
-    })
-}
-
-fn audio_channel_state_from_value(value: &Value) -> WlResult<AudioChannelState> {
-    Ok(AudioChannelState {
-        level: value
-            .get("level")
-            .and_then(Value::as_u64)
-            .map(level_percent_from_wire),
-        muted: bool_field(value, &["muted"])
-            .ok_or_else(|| WlError::Protocol("audio channel state missing muted".to_owned()))?,
-    })
-}
-
-fn level_percent_from_wire(value: u64) -> u16 {
-    u16::try_from(value.min(100)).expect("clamped to 0..=100")
-}
-
-fn parse_audio_channel(value: &str) -> WlResult<AudioChannel> {
-    match value {
-        "speaker" => Ok(AudioChannel::Speaker),
-        "microphone" => Ok(AudioChannel::Microphone),
-        other => Err(WlError::Protocol(format!(
-            "unknown audio channel '{other}'"
-        ))),
-    }
-}
-
-fn parse_audio_provider(value: &str) -> WlResult<AudioProviderKind> {
-    match value {
-        "local-hypervisor" => Ok(AudioProviderKind::LocalHypervisor),
-        "qemu-media" => Ok(AudioProviderKind::QemuMedia),
-        "aca-sandbox" => Ok(AudioProviderKind::AcaSandbox),
-        _ => Ok(AudioProviderKind::Unknown),
-    }
-}
-
-fn parse_audio_enforcement(value: &str) -> WlResult<AudioEnforcementPosture> {
-    match value {
-        "host-and-guest" => Ok(AudioEnforcementPosture::HostAndGuest),
-        "host-only" => Ok(AudioEnforcementPosture::HostOnly),
-        "guest-only" => Ok(AudioEnforcementPosture::GuestOnly),
-        "unsupported" => Ok(AudioEnforcementPosture::Unsupported),
-        _ => Ok(AudioEnforcementPosture::Unknown),
-    }
-}
-
-fn audio_channel_wire(channel: AudioChannel) -> &'static str {
-    match channel {
-        AudioChannel::Speaker => "speaker",
-        AudioChannel::Microphone => "microphone",
-    }
-}
-
-fn audio_channel_label(channel: AudioChannel) -> &'static str {
-    match channel {
-        AudioChannel::Speaker => "speaker",
-        AudioChannel::Microphone => "microphone",
-    }
-}
-
-fn capabilities_from_value(value: &Value) -> VmCapabilities {
-    let mut capabilities = VmCapabilities::default();
-    if let Some(runtime) = value.get("runtime") {
-        apply_positive_capabilities(&mut capabilities, runtime);
-    }
-    apply_unsupported_capabilities(&mut capabilities, value);
-    capabilities
-}
-
-fn apply_positive_capabilities(capabilities: &mut VmCapabilities, runtime: &Value) {
-    let Some(operation) = runtime
-        .get("operationCapabilities")
-        .or_else(|| runtime.get("operation_capabilities"))
-    else {
-        return;
-    };
-    if let Some(lifecycle) = operation.get("lifecycle") {
-        if let Some(v) = bool_field(lifecycle, &["start"]) {
-            capabilities.start = v;
+fn map_client_error(error: ClientError) -> WlError {
+    match error {
+        ClientError::ConnectFailed | ClientError::SessionLost | ClientError::TransportFailed => {
+            WlError::DaemonDown(error.to_string())
         }
-        if let Some(v) = bool_field(lifecycle, &["stop"]) {
-            capabilities.stop = v;
-        }
-        if let Some(v) = bool_field(lifecycle, &["restart"]) {
-            capabilities.restart = v;
-        }
-        if let Some(v) = bool_field(lifecycle, &["switch"]) {
-            capabilities.switch = v;
-            capabilities.build = v;
-            capabilities.boot = v;
-        }
-    }
-    if let Some(media) = operation.get("media") {
-        if let Some(v) = bool_field(media, &["usbHotplug", "usb_hotplug"]) {
-            capabilities.usb_hotplug = v;
-        }
-    }
-    if let Some(guest) = operation.get("guest") {
-        if let Some(v) = bool_field(guest, &["exec"]) {
-            capabilities.terminal = v;
-        }
-    }
-    if let Some(storage) = operation.get("storage") {
-        if let Some(v) = bool_field(storage, &["storeSync", "store_sync"]) {
-            capabilities.store_verify = v;
-        }
-    }
-}
-
-fn apply_unsupported_capabilities(capabilities: &mut VmCapabilities, value: &Value) {
-    let Some(items) = value
-        .get("unsupportedCapabilities")
-        .or_else(|| value.get("unsupported_capabilities"))
-        .and_then(Value::as_array)
-    else {
-        return;
-    };
-    for item in items.iter().filter_map(Value::as_str) {
-        match item {
-            "exec" | "guest-control" => capabilities.terminal = false,
-            "store-sync" => capabilities.store_verify = false,
-            "config-sync" => {
-                capabilities.switch = false;
-                capabilities.build = false;
-                capabilities.boot = false;
+        // The daemon is reachable; the authenticated session handshake
+        // itself failed. Report the truthful remediation instead of a
+        // blanket `DaemonDown`: an authentication rejection is `Denied`,
+        // everything else (framing, schema, replay, resource-exhaustion,
+        // and other handshake/record-protocol failures) is `Protocol`.
+        ClientError::SessionEstablishment(code) => match code {
+            d2b_client_toolkit::contracts::v2_component_session::SessionErrorCode::AuthenticationFailed => {
+                WlError::Denied(error.to_string())
             }
-            "usb-hotplug" => capabilities.usb_hotplug = false,
-            _ => {}
-        }
+            _ => WlError::Protocol(error.to_string()),
+        },
+        ClientError::Remote {
+            kind:
+                d2b_client_toolkit::RemoteErrorKind::Unauthorized
+                | d2b_client_toolkit::RemoteErrorKind::Forbidden,
+            ..
+        } => WlError::Denied(error.to_string()),
+        ClientError::DeadlineExpired => WlError::Timeout(error.to_string()),
+        _ => WlError::D2b(error.to_string()),
     }
-}
-
-fn map_auth_role(role: Option<&str>) -> AuthRole {
-    match role.unwrap_or_default().to_ascii_lowercase().as_str() {
-        "admin" => AuthRole::Admin,
-        "launcher" => AuthRole::Launcher,
-        _ => AuthRole::None,
-    }
-}
-
-fn parse_store_verify(value: Value) -> WlResult<StoreVerifySummary> {
-    let payload = response_payload(value, "storeVerifyResponse", "store verify", None)?;
-    serde_json::from_value(payload).map_err(WlError::from)
-}
-
-fn string_field(value: &Value, fields: &[&str]) -> Option<String> {
-    fields
-        .iter()
-        .find_map(|field| value.get(*field).and_then(Value::as_str))
-        .map(str::to_owned)
-}
-
-fn nested_string_field(value: &Value, parent_fields: &[&str], fields: &[&str]) -> Option<String> {
-    parent_fields
-        .iter()
-        .find_map(|field| value.get(*field))
-        .and_then(|nested| string_field(nested, fields))
-}
-
-fn bool_field(value: &Value, fields: &[&str]) -> Option<bool> {
-    fields
-        .iter()
-        .find_map(|field| value.get(*field).and_then(Value::as_bool))
-}
-
-fn runtime_text(value: Option<&Value>) -> Option<String> {
-    let value = value?;
-    value.as_str().map(str::to_owned).or_else(|| {
-        value
-            .get("detail")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-    })
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DaemonError {
-    kind: String,
-    #[serde(default, alias = "exitCode", alias = "code")]
-    exit_code: Option<u8>,
-    message: String,
-    #[serde(default)]
-    remediation: Option<String>,
-}
-
-impl DaemonError {
-    fn new(kind: &str, message: &str) -> Self {
-        Self {
-            kind: kind.to_owned(),
-            exit_code: None,
-            message: message.to_owned(),
-            remediation: None,
-        }
-    }
-
-    fn into_wl_error(self) -> WlError {
-        let message = if let Some(remediation) = self.remediation.filter(|value| !value.is_empty())
-        {
-            format!("{}: {} ({remediation})", self.kind, self.message)
-        } else {
-            format!("{}: {}", self.kind, self.message)
-        };
-        if self.kind.starts_with("authz-") || matches!(self.exit_code, Some(10 | 11)) {
-            WlError::Denied(message)
-        } else if self.kind == "wire-version-mismatch" || self.kind.starts_with("wire-") {
-            WlError::Protocol(message)
-        } else {
-            WlError::D2b(message)
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct MutatingVerbResponse {
-    verb: String,
-    outcome: String,
-    #[serde(default)]
-    target_wave: Option<String>,
-    #[serde(default)]
-    summary: Option<String>,
-    #[serde(default)]
-    remediation: Option<String>,
-    #[serde(default)]
-    api_ready: Option<String>,
-}
-
-impl MutatingVerbResponse {
-    fn failure_message(&self) -> String {
-        let mut message = format!("{} returned {}", self.verb, self.outcome);
-        if let Some(summary) = &self.summary {
-            message.push_str(": ");
-            message.push_str(summary);
-        }
-        if let Some(target_wave) = &self.target_wave {
-            message.push_str(" (target wave ");
-            message.push_str(target_wave);
-            message.push(')');
-        }
-        if let Some(remediation) = &self.remediation {
-            message.push_str("; ");
-            message.push_str(remediation);
-        }
-        if let Some(api_ready) = &self.api_ready {
-            message.push_str("; api-ready=");
-            message.push_str(api_ready);
-        }
-        message
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StoreVerifySummary {
-    vm: String,
-    status: String,
-    #[serde(default)]
-    checked: u32,
-    #[serde(default)]
-    drifted: u32,
-    #[serde(default)]
-    repaired: u32,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn client_carries_config() {
-        let config = Config {
-            public_socket: "/run/d2b/test.sock".into(),
-            command_timeout_ms: 1234,
+    fn projection(
+        name: &str,
+        kind: daemon::RuntimeKind,
+        state: daemon::WorkloadLifecycleState,
+    ) -> daemon::WorkloadProjection {
+        let mut identity = daemon::WorkloadIdentityProjection::new();
+        identity.workload_name = name.to_owned();
+        identity.canonical_target = format!("{name}.local.d2b");
+        let mut runtime = daemon::RuntimeProjection::new();
+        runtime.kind = kind.into();
+        runtime.supported_capabilities = vec![
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_LIFECYCLE.into(),
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_EXEC.into(),
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_USB_HOTPLUG.into(),
+            daemon::RuntimeCapability::RUNTIME_CAPABILITY_STORE_SYNC.into(),
+        ];
+        let mut lifecycle = daemon::WorkloadLifecycleProjection::new();
+        lifecycle.state = state.into();
+        daemon::WorkloadProjection {
+            identity: Some(identity).into(),
+            name: name.to_owned(),
+            environment: "work".to_owned(),
+            graphics: true,
+            static_ip: vec![10, 42, 0, 10],
+            lifecycle: Some(lifecycle).into(),
+            runtime: Some(runtime).into(),
             ..Default::default()
-        };
-        let client = D2bClient::new(&config);
-        assert_eq!(client.socket_path(), "/run/d2b/test.sock");
-        assert_eq!(client.timeout(), Duration::from_millis(1234));
+        }
     }
 
     #[test]
-    fn refresh_reports_daemon_down_for_absent_socket() {
-        let client = D2bClient::new(&Config {
-            public_socket: "/run/d2b-wlcontrol-absent-public.sock".to_owned(),
-            ..Default::default()
+    fn binds_the_exact_frozen_service_source() {
+        assert_eq!(
+            CLIENT_SOURCE_REVISION,
+            "9dc902243cdd7aba7ef269988b96f0aae6e037da"
+        );
+        assert_eq!(
+            CLIENT_SOURCE_FINGERPRINT,
+            "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+        );
+        assert!(matches!(ServiceKind::User, ServiceKind::User));
+        assert!(matches!(ServiceKind::Shell, ServiceKind::Shell));
+        assert!(matches!(ServiceKind::Notify, ServiceKind::Notify));
+        assert!(matches!(ServiceKind::Wayland, ServiceKind::Wayland));
+    }
+
+    #[test]
+    fn maps_canonical_vm_projection_without_wire_copies() {
+        let input = reduce_input(vec![projection(
+            "corp-vm",
+            daemon::RuntimeKind::RUNTIME_KIND_NIXOS,
+            daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RUNNING,
+        )]);
+        assert_eq!(input.connectivity, Connectivity::Connected);
+        assert_eq!(
+            input.auth,
+            Some(Auth {
+                role: AuthRole::Launcher
+            })
+        );
+        let vm = &input.inventory.expect("inventory").vms[0];
+        assert_eq!(vm.name, "corp-vm");
+        assert_eq!(vm.canonical_target.as_deref(), Some("corp-vm.local.d2b"));
+        assert_eq!(vm.static_ip.as_deref(), Some("10.42.0.10"));
+        assert!(vm.features.graphics);
+        assert!(vm.capabilities.start);
+        assert!(vm.capabilities.terminal);
+        assert!(!vm.capabilities.usb_hotplug);
+        assert!(!vm.capabilities.store_verify);
+    }
+
+    #[test]
+    fn excludes_non_vm_workloads_from_vm_borders_and_controls() {
+        let input = reduce_input(vec![projection(
+            "host-tool",
+            daemon::RuntimeKind::RUNTIME_KIND_UNSAFE_LOCAL,
+            daemon::WorkloadLifecycleState::WORKLOAD_LIFECYCLE_STATE_RUNNING,
+        )]);
+        assert!(input.inventory.expect("inventory").vms.is_empty());
+        assert!(input.statuses.is_empty());
+        assert!(input.workloads.is_none());
+    }
+
+    #[test]
+    fn maps_only_frozen_lifecycle_actions() {
+        assert!(matches!(
+            DispatchPlan::from_intent(&SocketIntent::VmStart {
+                vm: "corp-vm".to_owned()
+            })
+            .expect("start plan"),
+            DispatchPlan::Lifecycle {
+                method: DaemonMethod::Start,
+                ..
+            }
+        ));
+        let client = D2bClient::new(&Config::default());
+        let error = client
+            .dispatch(&SocketIntent::UsbProbe)
+            .expect_err("unrouted operation must fail before connecting");
+        assert!(matches!(error, WlError::D2b(message) if message == ROUTING_UNAVAILABLE));
+    }
+
+    #[test]
+    fn maps_session_authentication_failure_to_denied() {
+        use d2b_client_toolkit::contracts::v2_component_session::SessionErrorCode;
+
+        let error = map_client_error(ClientError::SessionEstablishment(
+            SessionErrorCode::AuthenticationFailed,
+        ));
+        assert!(matches!(error, WlError::Denied(_)));
+    }
+
+    #[test]
+    fn maps_other_session_establishment_codes_to_protocol() {
+        use d2b_client_toolkit::contracts::v2_component_session::SessionErrorCode;
+
+        for code in [
+            SessionErrorCode::SchemaMismatch,
+            SessionErrorCode::HandshakeTimeout,
+            SessionErrorCode::RecordReplay,
+        ] {
+            let error = map_client_error(ClientError::SessionEstablishment(code));
+            assert!(
+                matches!(error, WlError::Protocol(_)),
+                "expected Protocol for {code:?}, got {error:?}"
+            );
+        }
+    }
+
+    /// Binds and listens on a fresh `AF_UNIX SOCK_SEQPACKET` socket at a
+    /// process-unique temporary path, mirroring the pattern already used by
+    /// `wlcontrol-core`'s config tests for scratch filesystem state.
+    fn listen_seqpacket(name: &str) -> (OwnedFd, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "d2b-wlcontrol-connect-test-{}-{}",
+            std::process::id(),
+            name
+        ));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        let path = dir.join("d2bd.sock");
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("create listener socket");
+        let address = UnixAddr::new(&path).expect("bind address");
+        nix::sys::socket::bind(listener.as_raw_fd(), &address).expect("bind listener");
+        nix::sys::socket::listen(&listener, nix::sys::socket::Backlog::new(1).unwrap())
+            .expect("listen");
+        (listener, path)
+    }
+
+    #[test]
+    fn connect_nonblocking_succeeds_for_concurrent_clients() {
+        let (listener, path) = listen_seqpacket("concurrent");
+        let listener_fd = listener.as_raw_fd();
+        let acceptor = std::thread::spawn(move || {
+            for _ in 0..4 {
+                let _ = nix::sys::socket::accept(listener_fd).expect("accept connection");
+            }
+            drop(listener);
         });
-        assert_eq!(client.refresh().connectivity, Connectivity::DaemonDown);
+
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let fd = socket(
+                        AddressFamily::Unix,
+                        SockType::SeqPacket,
+                        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+                        None,
+                    )
+                    .expect("create client socket");
+                    let address = UnixAddr::new(&path).expect("client address");
+                    connect_nonblocking(&fd, &address)
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle
+                .join()
+                .expect("client thread")
+                .expect("concurrent connect must succeed");
+        }
+        acceptor.join().expect("acceptor thread");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(path.parent().expect("parent dir"));
     }
 
     #[test]
-    fn selected_version_range_matches_d2b_v04() {
-        assert!(selected_version_supported("0.4.0").is_ok());
-        assert!(selected_version_supported("0.4.9").is_ok());
-        assert!(selected_version_supported("0.4.0+build.1").is_ok());
-        assert!(selected_version_supported("0.4").is_err());
-        assert!(selected_version_supported("0.4.0-alpha").is_err());
-        assert!(selected_version_supported("0.5.0").is_err());
-        assert!(selected_version_supported("0.04.0").is_err());
-    }
+    fn connect_nonblocking_retries_through_a_momentarily_full_backlog() {
+        let (listener, path) = listen_seqpacket("backlog");
+        let listener_fd = listener.as_raw_fd();
+        // The listener is bound with a backlog of exactly one, and the
+        // acceptor briefly delays before draining it: any client attempt
+        // that races ahead of the first accept must observe the listener's
+        // full backlog (Linux reports this as `EAGAIN` for `AF_UNIX`), not
+        // a fatal error. `connect_nonblocking` must retry rather than
+        // surface that transient condition immediately.
+        let acceptor = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            for _ in 0..3 {
+                let _ = nix::sys::socket::accept(listener_fd).expect("accept connection");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            drop(listener);
+        });
 
-    #[test]
-    fn broker_socket_guard_rejects_priv_sock_paths() {
-        assert!(reject_privileged_broker_socket("/run/d2b/priv.sock").is_err());
-        assert!(reject_privileged_broker_socket("/custom/priv.sock").is_err());
-        assert!(reject_privileged_broker_socket("/run/d2b/public.sock").is_ok());
-    }
+        let handles: Vec<_> = (0..3)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let fd = socket(
+                        AddressFamily::Unix,
+                        SockType::SeqPacket,
+                        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+                        None,
+                    )
+                    .expect("create client socket");
+                    let address = UnixAddr::new(&path).expect("client address");
+                    connect_nonblocking(&fd, &address)
+                })
+            })
+            .collect();
 
-    #[test]
-    fn audio_status_parser_tolerates_forward_compatible_entries() {
-        let status = audio_status_from_result(&serde_json::json!({
-            "entries": [
-                {
-                    "vm": "future-vm",
-                    "speaker": { "level": 250, "muted": false },
-                    "microphone": { "level": 150, "muted": true },
-                    "providerKind": "future-provider",
-                    "enforcement": "future-mode"
-                },
-                {
-                    "vm": "broken-vm",
-                    "speaker": { "level": 80, "muted": false },
-                    "providerKind": "local-hypervisor",
-                    "enforcement": "host-and-guest"
-                }
-            ],
-            "errors": [
-                { "vm": "aca-vm", "kind": "provider-misconfigured" },
-                { "kind": "malformed-without-vm" }
-            ]
-        }))
-        .expect("forward-compatible audio status parses");
-
-        assert_eq!(status.entries.len(), 1);
-        assert_eq!(status.entries[0].vm, "future-vm");
-        assert_eq!(
-            status.entries[0].audio.provider_kind,
-            AudioProviderKind::Unknown
-        );
-        assert_eq!(
-            status.entries[0].audio.enforcement,
-            AudioEnforcementPosture::Unknown
-        );
-        assert_eq!(status.entries[0].audio.speaker.level, Some(100));
-        assert_eq!(status.entries[0].audio.microphone.level, Some(100));
-        assert_eq!(status.errors.len(), 1);
-        assert_eq!(status.errors[0].vm, "aca-vm");
+        for handle in handles {
+            handle
+                .join()
+                .expect("client thread")
+                .expect("connect must recover from a transiently full backlog");
+        }
+        acceptor.join().expect("acceptor thread");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(path.parent().expect("parent dir"));
     }
 }

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use wlcontrol_core::model::{AuthRole, Connectivity, RealmGroup, RuntimeState, Vm, WlState};
 
-use d2b_wayland_waybar::WaybarModule;
+use d2b_client_toolkit_waybar::WaybarModule;
 
 const DETAIL_VM_LIMIT: usize = 5;
 
