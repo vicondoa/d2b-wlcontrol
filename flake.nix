@@ -24,32 +24,56 @@
       pkgsFor = system: import nixpkgs { inherit system; };
       version = "2.0.0";
 
+      # Cargo git dependencies vendored by `rustPlatform.buildRustPackage`.
+      # Every hash covers a single (repository, commit) pair; Cargo.lock may
+      # list several crates resolved from the same pair (a workspace member
+      # plus its own transitive git dependencies), so several package keys
+      # below intentionally share one hash. Nix builds never substitute a
+      # local `../d2b-client-toolkit` checkout: the toolkit and its frozen
+      # `d2b` client sources are fetched straight from GitHub at the exact
+      # pinned revisions, hermetically, from a plain `git clone` of this repo.
+      cargoLock = {
+        lockFile = ./Cargo.lock;
+        outputHashes = {
+          # github:vicondoa/d2b-toolkit @ 926de54e7320599c373524a10b65aaf13b6ff422
+          "d2b-client-toolkit-2.0.0" = "sha256-vGb04cQDlO8KBoI5n0N//LLKhoLX8wK4nE0wu2UMJjQ=";
+          # github:vicondoa/d2b @ 9dc902243cdd7aba7ef269988b96f0aae6e037da
+          "d2b-client-2.0.0" = "sha256-mDNv+gkV0GKOFDWJEunuR76mPIwQsSg9AJcxsI5qhMQ=";
+          "d2b-contracts-2.0.0" = "sha256-mDNv+gkV0GKOFDWJEunuR76mPIwQsSg9AJcxsI5qhMQ=";
+          "d2b-session-2.0.0" = "sha256-mDNv+gkV0GKOFDWJEunuR76mPIwQsSg9AJcxsI5qhMQ=";
+          "d2b-session-unix-2.0.0" = "sha256-mDNv+gkV0GKOFDWJEunuR76mPIwQsSg9AJcxsI5qhMQ=";
+        };
+      };
+
       runtimeBins =
         pkgs: with pkgs; [
           quickshell
           xdg-utils
         ];
       runtimeFonts = pkgs: with pkgs; [ material-symbols ];
+
+      # Shared base for the package build and the hermetic fmt/clippy checks
+      # below: same source, same vendored git/registry dependencies, same
+      # toolchain. Each check overrides only the phases it needs.
+      mkCargoDerivation =
+        pkgs: extraAttrs:
+        pkgs.rustPlatform.buildRustPackage (
+          {
+            pname = "d2b-wlcontrol";
+            inherit version cargoLock;
+            src = pkgs.lib.cleanSource ./.;
+          }
+          // extraAttrs
+        );
     in
     {
       packages = forAllSystems (
         system:
         let
           pkgs = pkgsFor system;
-          clientToolkitSource = d2b-client-toolkit.packages.${system}.default;
         in
         {
-          default = pkgs.rustPlatform.buildRustPackage {
-            pname = "d2b-wlcontrol";
-            inherit version;
-            src = pkgs.lib.cleanSource ./.;
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              outputHashes = {
-                "d2b-client-2.0.0" = "sha256-mDNv+gkV0GKOFDWJEunuR76mPIwQsSg9AJcxsI5qhMQ=";
-              };
-            };
-
+          default = mkCargoDerivation pkgs {
             nativeBuildInputs = with pkgs; [ makeWrapper ];
 
             # The binary is provided by the wlcontrol-cli crate.
@@ -63,16 +87,6 @@
               wrapProgram "$out/bin/d2b-wlcontrol" \
                 --prefix PATH : ${pkgs.lib.makeBinPath (runtimeBins pkgs)} \
                 --prefix XDG_DATA_DIRS : ${pkgs.lib.makeSearchPath "share" (runtimeFonts pkgs)}
-            '';
-
-            postPatch = ''
-              substituteInPlace Cargo.toml \
-                --replace-fail "../d2b-client-toolkit/crates/d2b-client-toolkit-waybar" \
-                  "${clientToolkitSource}/share/d2b-client-toolkit/distribution/crates/d2b-client-toolkit-waybar" \
-                --replace-fail "../d2b-client-toolkit/crates/d2b-client-toolkit-colors" \
-                  "${clientToolkitSource}/share/d2b-client-toolkit/distribution/crates/d2b-client-toolkit-colors" \
-                --replace-fail "../d2b-client-toolkit/crates/d2b-client-toolkit" \
-                  "${clientToolkitSource}/share/d2b-client-toolkit/distribution/crates/d2b-client-toolkit"
             '';
 
             meta = with pkgs.lib; {
@@ -188,6 +202,30 @@
         in
         {
           package = self.packages.${system}.default;
+          fmt = mkCargoDerivation pkgs {
+            pname = "d2b-wlcontrol-fmt-check";
+            nativeBuildInputs = [ pkgs.rustfmt ];
+            buildPhase = ''
+              runHook preBuild
+              cargo fmt --all -- --check
+              runHook postBuild
+            '';
+            doCheck = false;
+            dontFixup = true;
+            installPhase = "mkdir -p $out";
+          };
+          clippy = mkCargoDerivation pkgs {
+            pname = "d2b-wlcontrol-clippy-check";
+            nativeBuildInputs = [ pkgs.clippy ];
+            buildPhase = ''
+              runHook preBuild
+              cargo clippy --workspace --all-targets --offline -- -D warnings
+              runHook postBuild
+            '';
+            doCheck = false;
+            dontFixup = true;
+            installPhase = "mkdir -p $out";
+          };
           release-metadata = pkgs.runCommand "d2b-wlcontrol-release-metadata-${version}" { } ''
             grep -Fq 'version = "2.0.0"' ${./Cargo.toml}
             grep -Fq '## [Unreleased]' ${./CHANGELOG.md}
@@ -196,6 +234,8 @@
             grep -Fq '9dc902243cdd7aba7ef269988b96f0aae6e037da' ${./Cargo.toml}
             grep -Fq '5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043' ${./Cargo.toml}
             grep -Fq '35c33c2e23e1b9f03b5abc3bbca2d3320e38c42dfc7aceb7e3476d28210cde8c' ${./Cargo.toml}
+            grep -Fq 'git = "https://github.com/vicondoa/d2b-toolkit"' ${./Cargo.toml}
+            ! grep -Fq '../d2b-client-toolkit' ${./Cargo.toml}
             test ! -e ${./.}/crates/wlcontrol-d2b/src/transport.rs
             test ! -e ${./.}/crates/wlcontrol-d2b/src/wire.rs
             test ! -e ${./.}/crates/wlcontrol-d2b/tests/public_socket.rs

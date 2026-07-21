@@ -7,7 +7,7 @@
 use std::{
     collections::BTreeSet,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, OwnedFd},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -23,7 +23,11 @@ use d2b_client_toolkit::{
     TransportSelection,
 };
 use nix::{
-    sys::socket::{connect, socket, AddressFamily, SockFlag, SockType, UnixAddr},
+    errno::Errno,
+    poll::{poll, PollFd, PollFlags, PollTimeout},
+    sys::socket::{
+        connect, getsockopt, socket, sockopt, AddressFamily, SockFlag, SockType, UnixAddr,
+    },
     unistd::{Gid, Uid, User},
 };
 use sha2::{Digest, Sha256};
@@ -43,6 +47,17 @@ pub use d2b_client_toolkit::{
 const MAX_PAGES: usize = 1024;
 const ROUTING_UNAVAILABLE: &str =
     "the frozen canonical service has no authenticated route for this operation";
+
+/// Bounded retry budget for a nonblocking `connect(2)` that races an
+/// `AF_UNIX` `SOCK_SEQPACKET` listener whose backlog is momentarily full
+/// (Linux reports this as `EAGAIN`, not `ECONNREFUSED`). Each attempt is a
+/// fresh `connect(2)` syscall, not a poll cycle.
+const CONNECT_RETRY_ATTEMPTS: u32 = 20;
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(10);
+/// Bounded budget for polling a connect-in-progress (`EINPROGRESS`) fd for
+/// writability before treating the connect as failed.
+const CONNECT_POLL_ATTEMPTS: u32 = 50;
+const CONNECT_POLL_TIMEOUT_MS: u16 = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchOutcome {
@@ -244,7 +259,7 @@ fn connect_seqpacket(path: &Path) -> Result<(OwnedFd, u32, u32, u32), ClientErro
     )
     .map_err(|_| ClientError::ConnectFailed)?;
     let address = UnixAddr::new(path).map_err(|_| ClientError::ConnectFailed)?;
-    connect(fd.as_raw_fd(), &address).map_err(|_| ClientError::ConnectFailed)?;
+    connect_nonblocking(&fd, &address)?;
     let daemon_uid = User::from_name("d2bd")
         .map_err(|_| ClientError::ConnectFailed)?
         .ok_or(ClientError::ConnectFailed)?
@@ -256,6 +271,63 @@ fn connect_seqpacket(path: &Path) -> Result<(OwnedFd, u32, u32, u32), ClientErro
         Gid::effective().as_raw(),
         daemon_uid,
     ))
+}
+
+/// Drives a nonblocking `connect(2)` on `fd` to completion.
+///
+/// The fd is created with `SOCK_NONBLOCK` (it is later handed to the async
+/// runtime, so it must stay nonblocking), which means `connect(2)` on an
+/// `AF_UNIX SOCK_SEQPACKET` socket can legitimately return:
+///
+/// - `EINPROGRESS`: the connect is in flight; poll for writability, then
+///   resolve the real outcome via `SO_ERROR`.
+/// - `EAGAIN` (Linux-specific for `AF_UNIX`): the listener's backlog is
+///   momentarily full; retry the `connect(2)` call itself after a short,
+///   bounded delay.
+/// - `EINTR`: retry immediately.
+///
+/// Any other error, or exhausting the bounded retry/poll budget, is
+/// reported as `ClientError::ConnectFailed` rather than treated as fatal
+/// on the first syscall return.
+fn connect_nonblocking(fd: &OwnedFd, address: &UnixAddr) -> Result<(), ClientError> {
+    for attempt in 0..CONNECT_RETRY_ATTEMPTS {
+        match connect(fd.as_raw_fd(), address) {
+            Ok(()) => return Ok(()),
+            Err(Errno::EINPROGRESS) => return wait_for_connect(fd),
+            Err(Errno::EINTR) => continue,
+            Err(Errno::EAGAIN) => {
+                if attempt + 1 == CONNECT_RETRY_ATTEMPTS {
+                    return Err(ClientError::ConnectFailed);
+                }
+                std::thread::sleep(CONNECT_RETRY_DELAY);
+            }
+            Err(_) => return Err(ClientError::ConnectFailed),
+        }
+    }
+    Err(ClientError::ConnectFailed)
+}
+
+/// Polls a connect-in-progress fd for writability and resolves the
+/// outcome via `SO_ERROR`, within a bounded number of poll attempts.
+fn wait_for_connect(fd: &OwnedFd) -> Result<(), ClientError> {
+    let mut fds = [PollFd::new(fd.as_fd(), PollFlags::POLLOUT)];
+    for _ in 0..CONNECT_POLL_ATTEMPTS {
+        match poll(&mut fds, PollTimeout::from(CONNECT_POLL_TIMEOUT_MS)) {
+            Ok(0) => continue,
+            Ok(_) => {
+                let err =
+                    getsockopt(fd, sockopt::SocketError).map_err(|_| ClientError::ConnectFailed)?;
+                return if err == 0 {
+                    Ok(())
+                } else {
+                    Err(ClientError::ConnectFailed)
+                };
+            }
+            Err(Errno::EINTR) => continue,
+            Err(_) => return Err(ClientError::ConnectFailed),
+        }
+    }
+    Err(ClientError::ConnectFailed)
 }
 
 async fn inspect_all(
@@ -526,10 +598,20 @@ fn lifecycle_digest(
 
 fn map_client_error(error: ClientError) -> WlError {
     match error {
-        ClientError::ConnectFailed
-        | ClientError::SessionLost
-        | ClientError::TransportFailed
-        | ClientError::SessionEstablishment(_) => WlError::DaemonDown(error.to_string()),
+        ClientError::ConnectFailed | ClientError::SessionLost | ClientError::TransportFailed => {
+            WlError::DaemonDown(error.to_string())
+        }
+        // The daemon is reachable; the authenticated session handshake
+        // itself failed. Report the truthful remediation instead of a
+        // blanket `DaemonDown`: an authentication rejection is `Denied`,
+        // everything else (framing, schema, replay, resource-exhaustion,
+        // and other handshake/record-protocol failures) is `Protocol`.
+        ClientError::SessionEstablishment(code) => match code {
+            d2b_client_toolkit::contracts::v2_component_session::SessionErrorCode::AuthenticationFailed => {
+                WlError::Denied(error.to_string())
+            }
+            _ => WlError::Protocol(error.to_string()),
+        },
         ClientError::Remote {
             kind:
                 d2b_client_toolkit::RemoteErrorKind::Unauthorized
@@ -645,5 +727,143 @@ mod tests {
             .dispatch(&SocketIntent::UsbProbe)
             .expect_err("unrouted operation must fail before connecting");
         assert!(matches!(error, WlError::D2b(message) if message == ROUTING_UNAVAILABLE));
+    }
+
+    #[test]
+    fn maps_session_authentication_failure_to_denied() {
+        use d2b_client_toolkit::contracts::v2_component_session::SessionErrorCode;
+
+        let error = map_client_error(ClientError::SessionEstablishment(
+            SessionErrorCode::AuthenticationFailed,
+        ));
+        assert!(matches!(error, WlError::Denied(_)));
+    }
+
+    #[test]
+    fn maps_other_session_establishment_codes_to_protocol() {
+        use d2b_client_toolkit::contracts::v2_component_session::SessionErrorCode;
+
+        for code in [
+            SessionErrorCode::SchemaMismatch,
+            SessionErrorCode::HandshakeTimeout,
+            SessionErrorCode::RecordReplay,
+        ] {
+            let error = map_client_error(ClientError::SessionEstablishment(code));
+            assert!(
+                matches!(error, WlError::Protocol(_)),
+                "expected Protocol for {code:?}, got {error:?}"
+            );
+        }
+    }
+
+    /// Binds and listens on a fresh `AF_UNIX SOCK_SEQPACKET` socket at a
+    /// process-unique temporary path, mirroring the pattern already used by
+    /// `wlcontrol-core`'s config tests for scratch filesystem state.
+    fn listen_seqpacket(name: &str) -> (OwnedFd, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "d2b-wlcontrol-connect-test-{}-{}",
+            std::process::id(),
+            name
+        ));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        let path = dir.join("d2bd.sock");
+        let listener = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .expect("create listener socket");
+        let address = UnixAddr::new(&path).expect("bind address");
+        nix::sys::socket::bind(listener.as_raw_fd(), &address).expect("bind listener");
+        nix::sys::socket::listen(&listener, nix::sys::socket::Backlog::new(1).unwrap())
+            .expect("listen");
+        (listener, path)
+    }
+
+    #[test]
+    fn connect_nonblocking_succeeds_for_concurrent_clients() {
+        let (listener, path) = listen_seqpacket("concurrent");
+        let listener_fd = listener.as_raw_fd();
+        let acceptor = std::thread::spawn(move || {
+            for _ in 0..4 {
+                let _ = nix::sys::socket::accept(listener_fd).expect("accept connection");
+            }
+            drop(listener);
+        });
+
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let fd = socket(
+                        AddressFamily::Unix,
+                        SockType::SeqPacket,
+                        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+                        None,
+                    )
+                    .expect("create client socket");
+                    let address = UnixAddr::new(&path).expect("client address");
+                    connect_nonblocking(&fd, &address)
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle
+                .join()
+                .expect("client thread")
+                .expect("concurrent connect must succeed");
+        }
+        acceptor.join().expect("acceptor thread");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(path.parent().expect("parent dir"));
+    }
+
+    #[test]
+    fn connect_nonblocking_retries_through_a_momentarily_full_backlog() {
+        let (listener, path) = listen_seqpacket("backlog");
+        let listener_fd = listener.as_raw_fd();
+        // The listener is bound with a backlog of exactly one, and the
+        // acceptor briefly delays before draining it: any client attempt
+        // that races ahead of the first accept must observe the listener's
+        // full backlog (Linux reports this as `EAGAIN` for `AF_UNIX`), not
+        // a fatal error. `connect_nonblocking` must retry rather than
+        // surface that transient condition immediately.
+        let acceptor = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            for _ in 0..3 {
+                let _ = nix::sys::socket::accept(listener_fd).expect("accept connection");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            drop(listener);
+        });
+
+        let handles: Vec<_> = (0..3)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let fd = socket(
+                        AddressFamily::Unix,
+                        SockType::SeqPacket,
+                        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+                        None,
+                    )
+                    .expect("create client socket");
+                    let address = UnixAddr::new(&path).expect("client address");
+                    connect_nonblocking(&fd, &address)
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle
+                .join()
+                .expect("client thread")
+                .expect("connect must recover from a transiently full backlog");
+        }
+        acceptor.join().expect("acceptor thread");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(path.parent().expect("parent dir"));
     }
 }

@@ -21,10 +21,14 @@ authors = ["vicondoa"]
 wlcontrol-core = { path = "crates/wlcontrol-core" }
 wlcontrol-d2b = { path = "crates/wlcontrol-d2b" }
 
-# Canonical client distribution and presentation-only helpers.
-d2b-client-toolkit = { path = "../d2b-client-toolkit/crates/d2b-client-toolkit", version = "=2.0.0", features = ["host-socket"] }
-d2b-client-toolkit-colors = { path = "../d2b-client-toolkit/crates/d2b-client-toolkit-colors", version = "=2.0.0" }
-d2b-client-toolkit-waybar = { path = "../d2b-client-toolkit/crates/d2b-client-toolkit-waybar", version = "=2.0.0" }
+# Canonical client distribution and presentation-only helpers, pinned to the
+# exact toolkit revision (see [workspace.metadata.d2b-client-toolkit] below).
+# These are Cargo git dependencies, not adjacent workspace path dependencies:
+# a plain checkout of this repository builds hermetically without a sibling
+# `d2b-client-toolkit` checkout on disk.
+d2b-client-toolkit = { git = "https://github.com/vicondoa/d2b-toolkit", rev = "926de54e7320599c373524a10b65aaf13b6ff422", features = ["host-socket"] }
+d2b-client-toolkit-colors = { git = "https://github.com/vicondoa/d2b-toolkit", rev = "926de54e7320599c373524a10b65aaf13b6ff422" }
+d2b-client-toolkit-waybar = { git = "https://github.com/vicondoa/d2b-toolkit", rev = "926de54e7320599c373524a10b65aaf13b6ff422" }
 
 # Shared third-party dependencies. Versions are pinned at the workspace
 # level so every crate speaks the same serde / error surface.
@@ -35,7 +39,7 @@ toml = "0.8"
 png = "0.17"
 
 clap = { version = "4", features = ["derive"] }
-nix = { version = "0.29", features = ["socket", "uio", "user"] }
+nix = { version = "0.29", features = ["socket", "uio", "user", "poll"] }
 directories = "5"
 sha2 = "0.10"
 tokio = { version = "1", features = ["net", "rt", "time"] }

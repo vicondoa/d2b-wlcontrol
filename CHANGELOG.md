@@ -17,6 +17,16 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
 
 ### Changed
 
+- Replaced the adjacent `path = "../d2b-client-toolkit/..."` workspace
+  dependencies with Cargo `git` dependencies pinned exactly to the frozen
+  `926de54e7320599c373524a10b65aaf13b6ff422` toolkit revision, so a plain
+  `cargo build`/`cargo test` no longer requires a sibling checkout. `flake.nix`
+  now vendors the same git dependencies hermetically via `outputHashes` for
+  `d2b-client-toolkit`, `d2b-client`, `d2b-contracts`, `d2b-session`, and
+  `d2b-session-unix`, and `nix flake check` gained dedicated `cargo fmt`/
+  `cargo clippy` checks so lint/format coverage no longer depends only on CI.
+  The CI workflow's "checkout exact d2b client toolkit source" step is
+  removed; Cargo resolves the pinned toolkit source directly.
 - Prepared the 2.0.0 client cutover by pinning the canonical
   `d2b-client-toolkit` source distribution exactly, consuming its renamed
   presentation-only color and Waybar crates, and keeping wlcontrol's normalized
@@ -60,6 +70,18 @@ All notable changes to `d2b-wlcontrol` are documented here. The format follows
 
 ### Fixed
 
+- Mapped `ClientError::SessionEstablishment` to a truthful `WlError`
+  remediation instead of a blanket `DaemonDown`: an authentication rejection
+  now reports `Denied`, and every other handshake/record-protocol code (schema
+  mismatch, replay, framing, and similar) reports `Protocol`. The daemon is
+  reachable in both cases; only the authenticated session establishment
+  failed.
+- Fixed `connect_seqpacket`'s nonblocking-connect handling for the local
+  `AF_UNIX SOCK_SEQPACKET` daemon socket: `EINPROGRESS` now polls for
+  writability and resolves through `SO_ERROR` instead of failing immediately,
+  and a momentarily full listener backlog (`EAGAIN`) now retries the
+  `connect(2)` call within a bounded budget instead of being treated as a
+  fatal error. Added concurrent-connect and full-backlog regression tests.
 - Deferred initial placement until the compositor work area and full panel size
   are available, so the popup reliably opens top-right, and made the empty
   center header an explicit drag target that does not compete with controls.
