@@ -6,11 +6,17 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Canonical d2b client adapter boundary for d2b-wlcontrol."
+description = "Direct d2bd public-socket client for d2b-wlcontrol."
 
 [dependencies]
 wlcontrol-core.workspace = true
-d2b-client-toolkit.workspace = true
-nix.workspace = true
-sha2.workspace = true
-tokio.workspace = true
+d2b-client.workspace = true
+d2b-toolkit-core.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+nix = { workspace = true, features = ["poll", "time"] }
+
+[dev-dependencies]
+serde_json.workspace = true

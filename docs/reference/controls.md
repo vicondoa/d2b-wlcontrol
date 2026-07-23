@@ -6,10 +6,10 @@ runtime capabilities. Disabled controls explain the failed prerequisite.
 
 | Surface | Minimum role | Dispatch |
 | --- | --- | --- |
-| Local VM inventory/status | authenticated launcher/admin | canonical `DaemonClient::Inspect` |
+| Workload inventory/status | read access | d2bd public workload list/status |
 | Configured `exec` item | launcher | `d2b launch <target> --item <id>` argv |
 | Configured `shell` item | launcher | configured `d2b-wlterm open <target> <id>` argv |
-| VM start/stop/restart | admin | canonical typed daemon lifecycle methods |
+| VM start/stop/restart | admin | d2bd public VM operations |
 | VM build | launcher | `d2b build <vm>` argv |
 | VM boot/switch/store verify | admin | d2bd public operations |
 | VM USB attach/detach | admin | d2bd public USB operations |
@@ -18,17 +18,6 @@ runtime capabilities. Disabled controls explain the failed prerequisite.
 | Observability URL | none | configured browser argv |
 
 All process dispatch is argv-only.
-
-The authenticated local session currently proves only that d2bd admitted a
-configured launcher or admin. It does not project which role was selected, so
-wlcontrol reports the conservative launcher posture and keeps admin controls
-disabled. The lifecycle mapping is ready for the canonical role projection; it
-does not guess admin authority from socket ownership or group membership.
-
-USB, store, audio, desktop observer/action, and User/Shell/Notify/Wayland
-service kinds do not yet have runtime-owned client routes. Those actions fail
-before connecting and never fall back to legacy JSON, root-owned state, helper
-sockets, or direct compositor control.
 
 ## Generic items
 

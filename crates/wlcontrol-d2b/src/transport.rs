@@ -1,0 +1,212 @@
+use std::{
+    io,
+    os::fd::{AsFd as _, AsRawFd as _, OwnedFd},
+    path::Path,
+    time::{Duration, Instant},
+};
+
+use nix::{
+    errno::Errno,
+    poll::{poll, PollFd, PollFlags, PollTimeout},
+    sys::socket::{
+        connect, getsockopt, recv, send, socket, sockopt, AddressFamily, MsgFlags, SockFlag,
+        SockType, UnixAddr,
+    },
+};
+use wlcontrol_core::error::{WlError, WlResult};
+
+use crate::wire::{decode_frame, encode_frame, MAX_FRAME_BYTES};
+
+#[derive(Debug)]
+pub(crate) struct SeqpacketTransport {
+    fd: OwnedFd,
+    timeout: Duration,
+}
+
+impl SeqpacketTransport {
+    pub(crate) fn connect(path: &Path, timeout: Duration) -> WlResult<Self> {
+        if !path.exists() {
+            return Err(WlError::DaemonDown(format!(
+                "{} does not exist",
+                path.display()
+            )));
+        }
+
+        let fd = socket(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
+            None,
+        )
+        .map_err(errno_to_io)?;
+        let addr = UnixAddr::new(path).map_err(|err| {
+            WlError::Config(format!(
+                "invalid public socket path {}: {err}",
+                path.display()
+            ))
+        })?;
+
+        match connect(fd.as_raw_fd(), &addr) {
+            Ok(()) => Ok(Self { fd, timeout }),
+            Err(Errno::EINPROGRESS | Errno::EALREADY | Errno::EAGAIN | Errno::EINTR) => {
+                wait_for(&fd, PollFlags::POLLOUT, timeout, "connect").map_err(|err| {
+                    if let WlError::Timeout(message) = err {
+                        WlError::DaemonDown(message)
+                    } else {
+                        err
+                    }
+                })?;
+                let socket_error = getsockopt(&fd, sockopt::SocketError).map_err(errno_to_io)?;
+                if socket_error == 0 {
+                    Ok(Self { fd, timeout })
+                } else {
+                    Err(connect_io_error(
+                        path,
+                        io::Error::from_raw_os_error(socket_error),
+                    ))
+                }
+            }
+            Err(Errno::EISCONN) => Ok(Self { fd, timeout }),
+            Err(err) => Err(connect_io_error(path, errno_to_io(err))),
+        }
+    }
+
+    pub(crate) fn send_payload(&self, payload: &[u8]) -> WlResult<()> {
+        let frame = encode_frame(payload)?;
+        let deadline = operation_deadline(self.timeout)?;
+        let sent = loop {
+            wait_for_until(&self.fd, PollFlags::POLLOUT, deadline, "send")?;
+            match send(self.fd.as_raw_fd(), &frame, MsgFlags::MSG_DONTWAIT) {
+                Ok(sent) => break sent,
+                Err(Errno::EINTR | Errno::EAGAIN) => continue,
+                Err(err) if matches!(err, Errno::EPIPE | Errno::ECONNRESET | Errno::ENOTCONN) => {
+                    return Err(WlError::DaemonDown(format!(
+                        "d2bd public socket closed during send: {err}"
+                    )));
+                }
+                Err(err) => return Err(WlError::Io(errno_to_io(err))),
+            }
+        };
+        if sent == frame.len() {
+            Ok(())
+        } else {
+            Err(WlError::Io(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "short write on seqpacket socket",
+            )))
+        }
+    }
+
+    pub(crate) fn recv_payload(&self) -> WlResult<Vec<u8>> {
+        let deadline = operation_deadline(self.timeout)?;
+        let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
+        let received = loop {
+            wait_for_until(&self.fd, PollFlags::POLLIN, deadline, "receive")?;
+            match recv(
+                self.fd.as_raw_fd(),
+                &mut buffer,
+                MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_TRUNC,
+            ) {
+                Ok(received) => break received,
+                Err(Errno::EINTR | Errno::EAGAIN) => continue,
+                Err(err) => return Err(WlError::Io(errno_to_io(err))),
+            }
+        };
+        if received == 0 {
+            return Err(WlError::DaemonDown(
+                "d2bd public socket closed during receive".to_owned(),
+            ));
+        }
+        Self::reject_truncated_packet(received, buffer.len())?;
+        let payload = decode_frame(&buffer[..received])?;
+        Ok(payload.to_vec())
+    }
+
+    fn reject_truncated_packet(received: usize, capacity: usize) -> WlResult<()> {
+        if received > capacity {
+            Err(WlError::Protocol(
+                "d2bd public socket packet exceeded the frame bound".to_owned(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn operation_deadline(timeout: Duration) -> WlResult<Instant> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| WlError::Config("d2bd timeout exceeds the supported range".to_owned()))
+}
+
+fn wait_for(fd: &OwnedFd, events: PollFlags, timeout: Duration, op: &str) -> WlResult<()> {
+    wait_for_until(fd, events, operation_deadline(timeout)?, op)
+}
+
+fn wait_for_until(fd: &OwnedFd, events: PollFlags, deadline: Instant, op: &str) -> WlResult<()> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(WlError::Timeout(format!(
+                "{op} on d2bd public socket reached its deadline"
+            )));
+        }
+        let timeout = PollTimeout::try_from(remaining)
+            .map_err(|err| WlError::Config(format!("invalid d2bd timeout: {err}")))?;
+        let mut pollfd = [PollFd::new(fd.as_fd(), events)];
+        let ready = match poll(&mut pollfd, timeout) {
+            Ok(ready) => ready,
+            Err(Errno::EINTR) => continue,
+            Err(error) => return Err(WlError::Io(errno_to_io(error))),
+        };
+        if ready == 0 {
+            return Err(WlError::Timeout(format!(
+                "{op} on d2bd public socket reached its deadline"
+            )));
+        }
+        let revents = pollfd[0].revents().unwrap_or_else(PollFlags::empty);
+        if revents.intersects(PollFlags::POLLERR | PollFlags::POLLNVAL)
+            || (revents.contains(PollFlags::POLLHUP) && !revents.intersects(events))
+        {
+            return Err(WlError::DaemonDown(format!(
+                "{op} on d2bd public socket failed ({revents:?})"
+            )));
+        }
+        if revents.intersects(events | PollFlags::POLLHUP) {
+            return Ok(());
+        }
+    }
+}
+
+fn connect_io_error(path: &Path, err: io::Error) -> WlError {
+    match err.kind() {
+        io::ErrorKind::NotFound
+        | io::ErrorKind::ConnectionRefused
+        | io::ErrorKind::ConnectionAborted
+        | io::ErrorKind::TimedOut => {
+            WlError::DaemonDown(format!("failed to connect to {}: {err}", path.display()))
+        }
+        io::ErrorKind::PermissionDenied => WlError::Denied(format!(
+            "permission denied connecting to {}: {err}",
+            path.display()
+        )),
+        _ => WlError::Io(err),
+    }
+}
+
+fn errno_to_io(errno: Errno) -> io::Error {
+    io::Error::from_raw_os_error(errno as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_seqpacket_length_is_rejected_before_slicing() {
+        let error =
+            SeqpacketTransport::reject_truncated_packet(MAX_FRAME_BYTES + 5, MAX_FRAME_BYTES + 4)
+                .expect_err("oversized packet must fail");
+        assert!(matches!(error, WlError::Protocol(_)));
+    }
+}
