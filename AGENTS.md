@@ -29,10 +29,12 @@ over surfaces d2b already exposes.
 
 ### Trust boundary (read this first)
 
-`d2b-wlcontrol` consumes only canonical operator-facing client surfaces:
+`d2b-wlcontrol` talks **only** to the operator-facing public
+surface:
 
-- the exact canonical source distributed by `d2b-client-toolkit`, including
-  authenticated local daemon inspection and frozen lifecycle methods; and
+- the d2bd public socket `/run/d2b/public.sock` (non-abstract
+  `SOCK_SEQPACKET`, 4-byte little-endian length-prefixed JSON frames,
+  `SO_PEERCRED` auth); and
 - where a CLI boundary is genuinely better UX (configured launch, detached
   guest terminal exec, or non-shell build), the official `d2b` CLI; and
 - `d2b-wlterm` for typed persistent-shell items addressed by canonical
@@ -47,9 +49,8 @@ It MUST NEVER:
   example `/var/lib/d2b/vms/<vm>/state/audio-state.json`);
 - read private launcher artifacts or connect to unsafe-local helper sockets;
 - construct commands as shell strings (always argv vectors);
-- infer admin authority from socket permissions or session reachability. An
-  authenticated daemon session proves only the minimum launcher read posture
-  until a canonical role projection is available.
+- assume capabilities from filesystem permissions instead of
+  `d2b auth status`.
 
 These are hard rules. See "Don'ts" below.
 
@@ -68,7 +69,7 @@ These are hard rules. See "Don'ts" below.
 ├── crates/
 │   ├── wlcontrol-core/       <- FROZEN domain contract: model, config,
 │   │                            reducer, action planner (see src/model.rs)
-│   ├── wlcontrol-d2b/         <- canonical client adapter boundary; no wire copies
+│   ├── wlcontrol-d2b/    <- direct d2bd public-socket client + framing
 │   ├── wlcontrol-waybar/     <- Waybar custom-module JSON renderer
 │   ├── wlcontrol-ui/         <- Quickshell/QML layer-shell popup launcher
 │   └── wlcontrol-cli/        <- `d2b-wlcontrol` binary (integration seam)
@@ -87,9 +88,8 @@ types belong in `wlcontrol-core` (see "The core contract").
 `crates/wlcontrol-core/src/model.rs` is the **frozen cross-crate
 contract**. Every other crate builds against it:
 
-- `wlcontrol-d2b` is the canonical client adapter boundary. It normalizes the
-  frozen daemon inspection projection and maps only frozen lifecycle methods.
-  Operations whose authenticated route is not runtime-owned fail closed.
+- `wlcontrol-d2b` produces `WlState` / source fragments from VM and public
+  workload operations on the socket.
 - `wlcontrol-waybar` and `wlcontrol-ui` render `WlState`.
 - `wlcontrol-cli` dispatches `PlannedAction`.
 

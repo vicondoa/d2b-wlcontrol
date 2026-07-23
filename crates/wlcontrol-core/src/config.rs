@@ -1,11 +1,9 @@
 //! User configuration for d2b-wlcontrol.
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, path::Path};
 
-use d2b_client_toolkit_colors::RgbaColor;
+use d2b_toolkit_core::{socket::ensure_client_socket, SocketClass};
+use d2b_wayland_core::RgbaColor;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{WlError, WlResult};
@@ -24,12 +22,8 @@ const UI_COLOR_ARTIFACT_VERSION: u8 = 1;
 /// canonical path and by basename so downstream protocol clients can share the
 /// same fail-closed guard before connecting.
 pub fn is_public_socket_path(path: &str) -> bool {
-    let path = path.trim();
-    if path.is_empty() {
-        return false;
-    }
-    let path = PathBuf::from(path);
-    path.file_name().and_then(|name| name.to_str()) != Some("priv.sock")
+    let class = classify_socket_path(path);
+    class != SocketClass::PrivilegedBroker && ensure_client_socket(class).is_ok()
 }
 
 /// Top-level configuration.
@@ -512,6 +506,21 @@ fn is_lower_hex_color(value: &str) -> bool {
     value
         .parse::<RgbaColor>()
         .is_ok_and(|color| color.css_hex() == value)
+}
+
+fn classify_socket_path(path: &str) -> SocketClass {
+    let path = path.trim();
+    if path == "/run/d2b/public.sock" {
+        return SocketClass::PublicDaemon;
+    }
+    if path.is_empty() || path == "/run/d2b/priv.sock" {
+        return SocketClass::PrivilegedBroker;
+    }
+    if std::path::Path::new(path).file_name() == Some(std::ffi::OsStr::new("priv.sock")) {
+        SocketClass::PrivilegedBroker
+    } else {
+        SocketClass::Other
+    }
 }
 
 fn log_color_error(kind: UiColorErrorKind, path: &Path, detail: &str) {
